@@ -239,8 +239,6 @@ def whatsapp_webhook():
     send_whatsapp_message(user_phone, answer)
     return "ok", 200
 
-# ================== RUN ==================
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+
 
