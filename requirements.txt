@@ -5,3 +5,6 @@ chromadb
 pymupdf
 google-generativeai
 requests
+gunicorn
+
+
