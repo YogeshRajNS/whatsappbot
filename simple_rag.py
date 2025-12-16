@@ -203,14 +203,20 @@ def query_docs():
 
 # ================== WHATSAPP WEBHOOK ==================
 
+from flask import make_response
+
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    if (
-        request.args.get("hub.mode") == "subscribe"
-        and request.args.get("hub.verify_token") == VERIFY_TOKEN
-    ):
-        return request.args.get("hub.challenge"), 200
-    return "Verification failed", 403
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        # Must return plain text exactly
+        return make_response(challenge, 200, {"Content-Type": "text/plain"})
+    else:
+        return "Verification failed", 403
+
 
 @app.route("/webhook", methods=["POST"])
 def whatsapp_webhook():
@@ -237,3 +243,4 @@ def whatsapp_webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8000)
+
