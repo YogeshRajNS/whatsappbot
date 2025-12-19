@@ -20,7 +20,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
 UPLOAD_DIR = "./uploads"
-CHROMA_DIR = "./chroma_store"
+CHROMA_DIR = "/tmp/chroma_store"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 if os.path.exists(CHROMA_DIR):
@@ -190,6 +190,7 @@ def whatsapp_webhook():
     return "ok", 200
 
 # ================== RENDER PORT ==================
+
 
 
 
