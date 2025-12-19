@@ -168,20 +168,38 @@ def whatsapp_webhook():
         msg = request.json["entry"][0]["changes"][0]["value"]["messages"][0]
         user_text = msg["text"]["body"]
         user_phone = msg["from"]
-        send_whatsapp_message(user_phone, f"Received your message: {user_text}")
-    except:
-        return "ok", 200
 
-    extractor = DocExtractor()
-    results = extractor.retrieve(user_text)
+        # Check if VECTOR_STORE has content
+        if not VECTOR_STORE:
+            send_whatsapp_message(user_phone, "No PDFs uploaded yet. Please upload a PDF first.")
+            return "ok", 200
 
-    answer = "".join(answer_with_gemini(user_text, results))
-    send_whatsapp_message(user_phone, answer)
+        # Retrieve relevant document content
+        extractor = DocExtractor()
+        results = extractor.retrieve(user_text)
+
+        if not results:
+            send_whatsapp_message(user_phone, "Sorry, I could not find anything relevant in the PDFs.")
+            return "ok", 200
+
+        # Generate answer with Gemini
+        answer = "".join(answer_with_gemini(user_text, results))
+        if not answer.strip():
+            answer = "Sorry, I could not generate an answer."
+
+        # Send the answer
+        send_whatsapp_message(user_phone, answer)
+
+    except Exception as e:
+        print("Webhook error:", e)
+        send_whatsapp_message(user_phone, "Something went wrong while processing your message.")
 
     return "ok", 200
+
 
 # ================== LOCAL / NGROK ==================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
 
