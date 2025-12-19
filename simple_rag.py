@@ -187,8 +187,21 @@ def whatsapp_webhook():
             send_whatsapp_message(user_phone, "Sorry, I could not find anything relevant in the PDFs.")
             return "ok", 200
 
-        # Generate answer with Gemini
-        answer = "".join(answer_with_gemini(user_text, results))
+        # Generate full answer from Gemini (no streaming)
+        context = "\n\n".join(results.values())
+        prompt = f"""
+Answer strictly from the document.
+
+Document:
+{context}
+
+Question:
+{user_text}
+"""
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        response = model.generate_content(prompt, stream=False)  # full answer returned
+        answer = response.text if hasattr(response, "text") else str(response)
+
         if not answer.strip():
             answer = "Sorry, I could not generate an answer."
 
@@ -202,10 +215,12 @@ def whatsapp_webhook():
     return "ok", 200
 
 
+
 # ================== LOCAL / NGROK ==================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
 
 
 
