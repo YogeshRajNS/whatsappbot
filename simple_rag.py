@@ -1,10 +1,9 @@
 import os
-import json
 import re
 import fitz
 import requests
 
-from flask import Flask, request, jsonify, Response, stream_with_context
+from flask import Flask, request, jsonify, Response, stream_with_context, make_response
 from flask_cors import CORS
 
 from sentence_transformers import SentenceTransformer
@@ -13,49 +12,48 @@ import google.generativeai as genai
 
 # ================== CONFIG ==================
 
-# Gemini API
-# with open("api.json", "r") as f:
-#     api = json.load(f)
-
-# genai.configure(api_key=api["api_key"])
+# Gemini API (Render ENV)
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# WhatsApp / Meta (SET THESE IN RENDER)
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "salon_verify_token")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
 UPLOAD_DIR = "./uploads"
+CHROMA_DIR = "./chroma_store"
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(CHROMA_DIR, exist_ok=True)
 
 # ================== APP ==================
 
 app = Flask(__name__)
 CORS(app)
 
+# ================== GLOBAL MODELS (IMPORTANT) ==================
+
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
+
 # ================== DOC EXTRACTOR ==================
 
 class docExtractor:
     def __init__(self, collection_name="doc_collection"):
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
-        self.chroma_client = chromadb.PersistentClient(path="./chroma_store")
-        self.collection = self.chroma_client.get_or_create_collection(
+        self.model = embedding_model
+        self.collection = chroma_client.get_or_create_collection(
             name=collection_name
         )
 
     def pdf_extractor(self, file_path):
         pdf_data = fitz.open(file_path)
-        pages = []
-        for page in pdf_data:
-            pages.append({
-                "page_number": page.number + 1,
-                "text": page.get_text()
-            })
-        return pages
+        return [
+            {"page_number": p.number + 1, "text": p.get_text()}
+            for p in pdf_data
+        ]
 
     def create_embeddings(self, pages):
         for p in pages:
-            p["vector"] = self.model.encode(p["text"])
+            p["vector"] = self.model.encode(p["text"]).tolist()
         return pages
 
     def store_to_chromadb(self, pages, doc_name):
@@ -73,17 +71,11 @@ class docExtractor:
     def retrieve(self, query, file_names=None, top_k=3):
         query_embedding = self.model.encode(query).tolist()
 
-        if file_names:
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where={"doc_name": {"$in": file_names}},
-            )
-        else:
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-            )
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            where={"doc_name": {"$in": file_names}} if file_names else None
+        )
 
         return dict(zip(results["ids"][0], results["documents"][0]))
 
@@ -101,34 +93,19 @@ class docExtractor:
             self.collection.delete(ids=ids)
         return ids
 
-# ================== GEMINI HELPERS ==================
-
-def check_with_gemini(prompt):
-    model = genai.GenerativeModel("models/gemini-2.5-flash")
-    response = model.generate_content(prompt).text
-
-    match = re.search(r"\$\$(.*?)\$\$", response, re.DOTALL)
-    if match:
-        response = match.group(1)
-
-    return re.sub(r"```", "", response).strip()
+# ================== GEMINI ==================
 
 def answer_with_gemini(query, docs):
     context = "\n\n".join(docs.values())
 
     prompt = f"""
-You are a helpful assistant.
 Answer strictly from the document.
 
-Document Content:
+Document:
 {context}
 
 Question:
 {query}
-
-Rules:
-- Use only document info
-- No outside knowledge
 """
 
     model = genai.GenerativeModel("models/gemini-2.5-flash")
@@ -137,7 +114,7 @@ Rules:
     for chunk in response:
         yield chunk.text
 
-# ================== WHATSAPP HELPERS ==================
+# ================== WHATSAPP ==================
 
 def send_whatsapp_message(to, text):
     url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
@@ -149,13 +126,12 @@ def send_whatsapp_message(to, text):
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
-        "text": {"body": text}
+        "text": {"body": text[:4096]}  # WhatsApp limit safety
     }
-    requests.post(url, headers=headers, json=payload)
+    requests.post(url, headers=headers, json=payload, timeout=5)
 
 # ================== ROUTES ==================
 
-# ---------- FILE UPLOAD ----------
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
     file = request.files.get("file")
@@ -166,65 +142,37 @@ def upload_file():
     file.save(path)
 
     extractor = docExtractor("my_doc_2")
-    pages = extractor.pdf_extractor(path)
-    pages = extractor.create_embeddings(pages)
+    pages = extractor.create_embeddings(
+        extractor.pdf_extractor(path)
+    )
     extractor.store_to_chromadb(pages, file.filename)
 
     os.remove(path)
     return jsonify({"message": "Uploaded successfully"})
 
-# ---------- LIST DOCS ----------
-@app.route("/list_docs", methods=["GET"])
-def list_docs():
-    extractor = docExtractor("my_doc_2")
-    return jsonify({"docs": extractor.retrieve_doc_name_list()})
-
-# ---------- DELETE DOCS ----------
-@app.route("/delete_docs", methods=["DELETE"])
-def delete_docs():
-    data = request.json
-    extractor = docExtractor("my_doc_2")
-    deleted = extractor.delete_docs(data.get("docs", []))
-    return jsonify({"deleted": deleted})
-
-# ---------- API QUERY ----------
 @app.route("/query", methods=["POST"])
 def query_docs():
     data = request.json
-    question = data["query"]
-    docs = data.get("docs", [])
-
     extractor = docExtractor("my_doc_2")
-    results = extractor.retrieve(question, docs)
+    results = extractor.retrieve(data["query"], data.get("docs"))
 
     return Response(
-        stream_with_context(answer_with_gemini(question, results)),
+        stream_with_context(answer_with_gemini(data["query"], results)),
         content_type="text/plain"
     )
 
 # ================== WHATSAPP WEBHOOK ==================
 
-from flask import make_response
-
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
-    challenge = request.args.get("hub.challenge")
-
-    if mode == "subscribe" and token == VERIFY_TOKEN:
-        # Must return plain text exactly
-        return make_response(challenge, 200, {"Content-Type": "text/plain"})
-    else:
-        return "Verification failed", 403
-
+    if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+        return make_response(request.args.get("hub.challenge"), 200)
+    return "Verification failed", 403
 
 @app.route("/webhook", methods=["POST"])
 def whatsapp_webhook():
-    data = request.json
-
     try:
-        msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
+        msg = request.json["entry"][0]["changes"][0]["value"]["messages"][0]
         user_text = msg["text"]["body"]
         user_phone = msg["from"]
     except:
@@ -233,14 +181,13 @@ def whatsapp_webhook():
     extractor = docExtractor("my_doc_2")
     results = extractor.retrieve(user_text)
 
-    answer = ""
-    for chunk in answer_with_gemini(user_text, results):
-        answer += chunk
-
+    answer = "".join(answer_with_gemini(user_text, results))
     send_whatsapp_message(user_phone, answer)
+
     return "ok", 200
 
+# ================== RENDER PORT ==================
 
-
-
-
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
