@@ -168,6 +168,7 @@ def whatsapp_webhook():
         msg = request.json["entry"][0]["changes"][0]["value"]["messages"][0]
         user_text = msg["text"]["body"]
         user_phone = msg["from"]
+        send_whatsapp_message(user_phone, f"Received your message: {user_text}")
     except:
         return "ok", 200
 
@@ -183,3 +184,4 @@ def whatsapp_webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
