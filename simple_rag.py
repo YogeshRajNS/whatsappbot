@@ -107,7 +107,7 @@ Question:
 
 # ================== WHATSAPP ==================
 
-def send_whatsapp_message(to):
+def send_whatsapp_message(to, text_content):
     url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -116,14 +116,11 @@ def send_whatsapp_message(to):
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
-        "type": "template",
-        "template": {
-            "name": "jaspers_market_plain_text_v1",
-            "language": {"code": "en_US"}
-        }
+        "type": "text", # Changed from template
+        "text": {"body": text_content} # Added actual answer here
     }
     resp = requests.post(url, headers=headers, json=payload)
-    print(resp.status_code, resp.text)
+    return resp.json()
 
 
 # ================== ROUTES ==================
@@ -220,6 +217,7 @@ Question:
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
 
 
 
