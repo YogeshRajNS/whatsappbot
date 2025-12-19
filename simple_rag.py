@@ -107,8 +107,8 @@ Question:
 
 # ================== WHATSAPP ==================
 
-def send_whatsapp_message(to, text):
-    url = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}/messages"
+def send_template_message(to):
+    url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
         "Content-Type": "application/json"
@@ -116,10 +116,15 @@ def send_whatsapp_message(to, text):
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
-        "type": "text",
-        "text": {"body": text[:4096]}
+        "type": "template",
+        "template": {
+            "name": "jaspers_market_plain_text_v1",
+            "language": {"code": "en_US"}
+        }
     }
-    requests.post(url, headers=headers, json=payload, timeout=5)
+    resp = requests.post(url, headers=headers, json=payload)
+    print(resp.status_code, resp.text)
+
 
 # ================== ROUTES ==================
 
@@ -201,5 +206,6 @@ def whatsapp_webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
 
 
