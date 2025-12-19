@@ -4,3 +4,5 @@ requests
 pymupdf
 numpy
 google-generativeai
+gunicorn
+
