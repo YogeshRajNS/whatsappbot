@@ -23,8 +23,11 @@ UPLOAD_DIR = "./uploads"
 CHROMA_DIR = "./chroma_store"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(CHROMA_DIR, exist_ok=True)
-
+if os.path.exists(CHROMA_DIR):
+    if not os.path.isdir(CHROMA_DIR):
+        raise RuntimeError(f"{CHROMA_DIR} exists but is not a directory")
+else:
+    os.mkdir(CHROMA_DIR)
 # ================== APP ==================
 
 app = Flask(__name__)
@@ -187,5 +190,6 @@ def whatsapp_webhook():
     return "ok", 200
 
 # ================== RENDER PORT ==================
+
 
 
