@@ -14,10 +14,11 @@ import google.generativeai as genai
 # ================== CONFIG ==================
 
 # Gemini API
-with open("api.json", "r") as f:
-    api = json.load(f)
+# with open("api.json", "r") as f:
+#     api = json.load(f)
 
-genai.configure(api_key=api["api_key"])
+# genai.configure(api_key=api["api_key"])
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 # WhatsApp / Meta (SET THESE IN RENDER)
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "salon_verify_token")
@@ -238,6 +239,7 @@ def whatsapp_webhook():
 
     send_whatsapp_message(user_phone, answer)
     return "ok", 200
+
 
 
 
