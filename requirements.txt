@@ -1,10 +1,6 @@
 flask
 flask-cors
-sentence-transformers
-chromadb
-pymupdf
-google-generativeai
 requests
-gunicorn
-
-
+pymupdf
+numpy
+google-generativeai
