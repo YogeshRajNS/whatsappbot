@@ -107,7 +107,7 @@ Question:
 
 # ================== WHATSAPP ==================
 
-def send_template_message(to):
+def send_whatsapp_message(to):
     url = f"https://graph.facebook.com/v22.0/{PHONE_NUMBER_ID}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_TOKEN}",
@@ -220,6 +220,7 @@ Question:
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
 
 
 
