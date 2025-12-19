@@ -1,18 +1,15 @@
 import os
-import re
 import fitz
 import requests
+import numpy as np
 
 from flask import Flask, request, jsonify, Response, stream_with_context, make_response
 from flask_cors import CORS
 
-from sentence_transformers import SentenceTransformer
-import chromadb
 import google.generativeai as genai
 
 # ================== CONFIG ==================
 
-# Gemini API (Render ENV)
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "salon_verify_token")
@@ -20,90 +17,73 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 
 UPLOAD_DIR = "./uploads"
-CHROMA_DIR = "/tmp/chroma_store"
-
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-if os.path.exists(CHROMA_DIR):
-    if not os.path.isdir(CHROMA_DIR):
-        raise RuntimeError(f"{CHROMA_DIR} exists but is not a directory")
-else:
-    os.mkdir(CHROMA_DIR)
+
 # ================== APP ==================
 
 app = Flask(__name__)
 CORS(app)
 
-# ================== GLOBAL MODELS (IMPORTANT) ==================
+# ================== SIMPLE VECTOR STORE ==================
+# Structure:
+# {
+#   "doc_name": [
+#       {"page": 1, "text": "...", "vector": [...]},
+#       ...
+#   ]
+# }
 
-embedding_model = None
+VECTOR_STORE = {}
 
-def get_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-    return embedding_model
+# ================== UTILS ==================
 
-chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
+def embed_text(text: str):
+    """Gemini remote embedding"""
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text
+    )
+    return np.array(result["embedding"], dtype=np.float32)
+
+def cosine_sim(a, b):
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 # ================== DOC EXTRACTOR ==================
 
-class docExtractor:
-    def __init__(self, collection_name="doc_collection"):
-        self.model = get_embedding_model()
-        self.collection = chroma_client.get_or_create_collection(
-            name=collection_name
-        )
+class DocExtractor:
 
     def pdf_extractor(self, file_path):
-        pdf_data = fitz.open(file_path)
+        pdf = fitz.open(file_path)
         return [
-            {"page_number": p.number + 1, "text": p.get_text()}
-            for p in pdf_data
+            {"page": p.number + 1, "text": p.get_text()}
+            for p in pdf
         ]
 
-    def create_embeddings(self, pages):
+    def index_document(self, pages, doc_name):
+        vectors = []
         for p in pages:
-            p["vector"] = self.model.encode(p["text"]).tolist()
-        return pages
+            vectors.append({
+                "page": p["page"],
+                "text": p["text"],
+                "vector": embed_text(p["text"])
+            })
+        VECTOR_STORE[doc_name] = vectors
 
-    def store_to_chromadb(self, pages, doc_name):
-        for p in pages:
-            self.collection.add(
-                documents=[p["text"]],
-                embeddings=[p["vector"]],
-                metadatas=[{
-                    "page_number": p["page_number"],
-                    "doc_name": doc_name
-                }],
-                ids=[f"{doc_name}_page_{p['page_number']}"]
-            )
+    def retrieve(self, query, doc_names=None, top_k=3):
+        query_vec = embed_text(query)
+        scores = []
 
-    def retrieve(self, query, file_names=None, top_k=3):
-        query_embedding = self.model.encode(query).tolist()
+        for doc, pages in VECTOR_STORE.items():
+            if doc_names and doc not in doc_names:
+                continue
+            for p in pages:
+                score = cosine_sim(query_vec, p["vector"])
+                scores.append((score, p["text"]))
 
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            where={"doc_name": {"$in": file_names}} if file_names else None
-        )
+        scores.sort(reverse=True, key=lambda x: x[0])
+        return {f"doc_{i}": text for i, (_, text) in enumerate(scores[:top_k])}
 
-        return dict(zip(results["ids"][0], results["documents"][0]))
-
-    def retrieve_doc_name_list(self):
-        results = self.collection.get(include=["metadatas"])
-        return sorted(set(m["doc_name"] for m in results["metadatas"]))
-
-    def delete_docs(self, doc_names):
-        results = self.collection.get(include=["metadatas"])
-        ids = [
-            doc_id for doc_id, meta in zip(results["ids"], results["metadatas"])
-            if meta.get("doc_name") in doc_names
-        ]
-        if ids:
-            self.collection.delete(ids=ids)
-        return ids
-
-# ================== GEMINI ==================
+# ================== GEMINI ANSWER ==================
 
 def answer_with_gemini(query, docs):
     context = "\n\n".join(docs.values())
@@ -122,7 +102,8 @@ Question:
     response = model.generate_content(prompt, stream=True)
 
     for chunk in response:
-        yield chunk.text
+        if chunk.text:
+            yield chunk.text
 
 # ================== WHATSAPP ==================
 
@@ -136,11 +117,15 @@ def send_whatsapp_message(to, text):
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
-        "text": {"body": text[:4096]}  # WhatsApp limit safety
+        "text": {"body": text[:4096]}
     }
     requests.post(url, headers=headers, json=payload, timeout=5)
 
 # ================== ROUTES ==================
+
+@app.route("/")
+def health():
+    return "Service running", 200
 
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
@@ -151,11 +136,9 @@ def upload_file():
     path = os.path.join(UPLOAD_DIR, file.filename)
     file.save(path)
 
-    extractor = docExtractor("my_doc_2")
-    pages = extractor.create_embeddings(
-        extractor.pdf_extractor(path)
-    )
-    extractor.store_to_chromadb(pages, file.filename)
+    extractor = DocExtractor()
+    pages = extractor.pdf_extractor(path)
+    extractor.index_document(pages, file.filename)
 
     os.remove(path)
     return jsonify({"message": "Uploaded successfully"})
@@ -163,7 +146,7 @@ def upload_file():
 @app.route("/query", methods=["POST"])
 def query_docs():
     data = request.json
-    extractor = docExtractor("my_doc_2")
+    extractor = DocExtractor()
     results = extractor.retrieve(data["query"], data.get("docs"))
 
     return Response(
@@ -188,7 +171,7 @@ def whatsapp_webhook():
     except:
         return "ok", 200
 
-    extractor = docExtractor("my_doc_2")
+    extractor = DocExtractor()
     results = extractor.retrieve(user_text)
 
     answer = "".join(answer_with_gemini(user_text, results))
@@ -196,16 +179,7 @@ def whatsapp_webhook():
 
     return "ok", 200
 
-# ================== RENDER PORT ==================
+# ================== LOCAL / NGROK ==================
+
 if __name__ == "__main__":
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        threaded=True
-    )
-
-
-
-
-
-
+    app.run(host="0.0.0.0", port=5000, threaded=True)
