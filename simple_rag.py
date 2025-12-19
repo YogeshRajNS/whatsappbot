@@ -35,14 +35,21 @@ CORS(app)
 
 # ================== GLOBAL MODELS (IMPORTANT) ==================
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+embedding_model = None
+
+def get_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return embedding_model
+
 chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
 
 # ================== DOC EXTRACTOR ==================
 
 class docExtractor:
     def __init__(self, collection_name="doc_collection"):
-        self.model = embedding_model
+        self.model = get_embedding_model()
         self.collection = chroma_client.get_or_create_collection(
             name=collection_name
         )
@@ -190,6 +197,7 @@ def whatsapp_webhook():
     return "ok", 200
 
 # ================== RENDER PORT ==================
+
 
 
 
