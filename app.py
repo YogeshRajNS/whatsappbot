@@ -38,7 +38,7 @@ genai_client = genai.Client(api_key=GEMINI_API_KEY)
 weaviate_client = WeaviateClient(
     connection_params=ConnectionParams.from_url(
         WEAVIATE_URL,
-        grpc_port=443
+        grpc_port=50051
     ),
     auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
