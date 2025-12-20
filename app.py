@@ -41,8 +41,7 @@ weaviate_client = WeaviateClient(
             host=WEAVIATE_URL.replace("https://", ""),
             port=443,
             secure=True
-        ),
-        grpc=None  # 🚫 Disable gRPC completely (Render safe)
+        )
     ),
     auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
