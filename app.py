@@ -94,7 +94,7 @@ Document:
 Question:
 {query}
 """
-    model = genai.GenerativeModel("models/gemini-2.5-flash")
+    model = genai.GenerativeModel("models/gemini-2.0-flash")
     res = model.generate_content(prompt)
     return res.text.strip()
 
@@ -163,4 +163,4 @@ def health():
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000)
