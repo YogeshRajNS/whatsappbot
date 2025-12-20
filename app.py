@@ -94,7 +94,7 @@ Document:
 Question:
 {query}
 """
-    model = genai.GenerativeModel("models/gemini-2.0-flash")
+    model = genai.GenerativeModel("models/gemini-2.5-flash")
     res = model.generate_content(prompt)
     return res.text.strip()
 
