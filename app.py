@@ -250,11 +250,14 @@ def verify():
         return make_response(request.args.get("hub.challenge"), 200)
     return "Forbidden", 403
 
+# ---------------- WEBHOOK ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
+    print("Incoming payload:", json.dumps(data))  # debug
 
     try:
+        # Safely extract messages
         entry = data.get("entry", [{}])[0]
         changes = entry.get("changes", [{}])[0]
         value = changes.get("value", {})
@@ -262,17 +265,23 @@ def webhook():
 
         if messages:
             msg = messages[0]
-            if msg.get("type") == "text":
-                threading.Thread(
-                    target=process_message,
-                    args=(msg["from"], msg["text"]["body"]),
-                    daemon=True
-                ).start()
+            phone = msg.get("from")
+            msg_type = msg.get("type")
+
+            if msg_type == "text":
+                user_text = msg.get("text", {}).get("body")
+                if user_text:
+                    threading.Thread(
+                        target=process_message,
+                        args=(phone, user_text),
+                        daemon=True
+                    ).start()
 
     except Exception as e:
-        print("Webhook error:", e)
+        print("Webhook parse error:", e)
 
     return "ok", 200
+
 
 # ---------------- HEALTH ----------------
 @app.route("/")
