@@ -136,24 +136,41 @@ def verify():
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    data = request.get_json()
+    
+    # Debug: This lets you see the payload in your Render logs
+    print(f"Incoming Payload: {json.dumps(data)}")
+
     try:
-        msg = request.json["entry"][0]["changes"][0]["value"].get("messages")
-        if not msg:
-            return "ok", 200
+        # Step-by-step extraction based on your specific JSON:
+        entry = data.get("entry", [{}])[0]
+        changes = entry.get("changes", [{}])[0]
+        value = changes.get("value", {})
+        
+        # Meta sends 'statuses' (sent/delivered) and 'messages' (incoming text).
+        # We only care about 'messages'.
+        messages = value.get("messages")
 
-        msg = msg[0]
-        phone = msg["from"]
-        text = msg["text"]["body"]
+        if messages:
+            message = messages[0]
+            phone = message.get("from") # In your case: "918121676994"
+            
+            # Check if the message type is 'text'
+            if message.get("type") == "text":
+                user_text = message.get("text", {}).get("body") # In your case: "What is in the pdf"
+                
+                print(f"Found Message: '{user_text}' from {phone}")
 
-        # Respond fast, process async
-        threading.Thread(
-            target=process_message,
-            args=(phone, text)
-        ).start()
+                # Start your RAG/Gemini logic in a background thread
+                threading.Thread(
+                    target=process_message,
+                    args=(phone, user_text)
+                ).start()
 
     except Exception as e:
-        print("Webhook error:", e)
+        print(f"Error parsing JSON: {e}")
 
+    # ALWAYS return 200 OK to Meta immediately
     return "ok", 200
 
 # ---------------- HEALTH ----------------
