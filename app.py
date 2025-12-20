@@ -12,8 +12,9 @@ from google import genai
 
 # ===== Weaviate v4 =====
 from weaviate import WeaviateClient
-from weaviate.connect import ConnectionParams
+from weaviate.connect import ConnectionParams,ProtocolParams
 from weaviate.auth import AuthApiKey
+import os
 
 # ---------------- CONFIG ----------------
 
