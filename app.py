@@ -14,6 +14,8 @@ from google import genai
 from weaviate import WeaviateClient
 from weaviate.connect import ConnectionParams, ProtocolParams
 from weaviate.auth import AuthApiKey
+import weaviate
+from weaviate.classes.init import Auth
 
 # ---------------- CONFIG ----------------
 
@@ -35,18 +37,20 @@ app = Flask(__name__)
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------- WEAVIATE CLIENT (REAL v4 SAFE WAY) ----------------
-weaviate_client = WeaviateClient(
-    connection_params=ConnectionParams(
-        http=ProtocolParams(
-            host=WEAVIATE_URL.replace("https://", ""),
-            port=443,
-            secure=True
-        )
-    ),
-    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
+# ---------------- WEAVIATE CLIENT ----------------
+
+weaviate_client = weaviate.connect_to_weaviate_cloud(
+    cluster_url=WEAVIATE_URL,
+    auth_credentials=Auth.api_key(WEAVIATE_API_KEY),
 )
 
-weaviate_client.connect()
+if not weaviate_client.is_ready():
+    raise RuntimeError("Weaviate client not ready")
+
+# 🔐 IMPORTANT: close client cleanly when app stops
+import atexit
+atexit.register(lambda: weaviate_client.close())
+
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
