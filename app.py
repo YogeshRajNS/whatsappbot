@@ -11,10 +11,8 @@ from flask import Flask, request, make_response
 from google import genai
 
 # ===== Weaviate v4 =====
-from weaviate import WeaviateClient
-from weaviate.connect import ConnectionParams,ProtocolParams
-from weaviate.auth import AuthApiKey
-import os
+import weaviate
+from weaviate.classes.init import Auth
 
 # ---------------- CONFIG ----------------
 
@@ -36,21 +34,13 @@ app = Flask(__name__)
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------- WEAVIATE CLIENT (v4 SAFE INIT) ----------------
-weaviate_client = WeaviateClient(
-    connection_params=ConnectionParams(
-        http=ProtocolParams(
-            host=WEAVIATE_URL,
-            port=443,
-            secure=True
-        ),
-        grpc=ProtocolParams(  # dummy; not used
-            host="dummy",
-            port=443,
-            secure=False
-        )
-    ),
-    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
+weaviate_client = weaviate.connect_to_weaviate_cloud(
+    cluster_url=WEAVIATE_URL,
+    auth_credentials=Auth.api_key(WEAVIATE_API_KEY)
 )
+
+if not weaviate_client.is_ready():
+    print("⚠️ Warning: Weaviate client not ready!")
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
@@ -88,7 +78,7 @@ def embed(text):
             contents=[text]  # list of strings
         )
         # Extract embedding properly
-        EMBED_CACHE[text] = res.embeddings[0]  # ⬅️ use .embeddings
+        EMBED_CACHE[text] = res.embeddings[0]
         return EMBED_CACHE[text]
 
     except Exception as e:
@@ -98,7 +88,6 @@ def embed(text):
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
 
-# ---------------- PDF INGEST ----------------
 # ---------------- PDF INGEST ----------------
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
@@ -112,9 +101,6 @@ def upload_file():
     try:
         pdf = fitz.open(path)
         collection = weaviate_client.collections.get("PDFChunk")
-        
-        # Ensure client is connected
-        weaviate_client.connect()
 
         # Use SAFE v4 dynamic batch context
         with collection.batch.dynamic() as batch:
@@ -142,8 +128,6 @@ def upload_file():
     finally:
         if os.path.exists(path):
             os.remove(path)
-
-
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
@@ -279,7 +263,6 @@ def webhook():
         print("Webhook parse error:", e)
 
     return "ok", 200
-
 
 # ---------------- HEALTH ----------------
 @app.route("/")
