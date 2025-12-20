@@ -85,7 +85,7 @@ def embed(text):
     try:
         res = genai_client.models.embed_content(
             model="models/text-embedding-004",
-            content=text
+            contents=text
         )
         EMBED_CACHE[text] = res["embedding"]
         return EMBED_CACHE[text]
