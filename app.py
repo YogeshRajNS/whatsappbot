@@ -13,6 +13,8 @@ from google import genai
 # ===== Weaviate v4 =====
 from weaviate import WeaviateClient
 from weaviate.connect import ConnectionParams
+from weaviate.auth import AuthApiKey
+
 
 # ---------------- CONFIG ----------------
 
@@ -36,10 +38,11 @@ genai_client = genai.Client(api_key=GEMINI_API_KEY)
 # ---------------- WEAVIATE CLIENT (v4) ----------------
 weaviate_client = WeaviateClient(
     connection_params=ConnectionParams.from_url(
-        WEAVIATE_URL,
-        api_key=WEAVIATE_API_KEY
-    )
+        WEAVIATE_URL
+    ),
+    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
+
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
