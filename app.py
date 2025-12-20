@@ -11,7 +11,7 @@ from flask import Flask, request, make_response
 from google import genai
 
 # ===== Weaviate v4 =====
-import weaviate
+from weaviate import connect_to_weaviate_cloud
 from weaviate.classes.init import Auth
 
 # ---------------- CONFIG ----------------
@@ -34,13 +34,17 @@ app = Flask(__name__)
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------- WEAVIATE CLIENT (v4 SAFE INIT) ----------------
-weaviate_client = weaviate.connect_to_weaviate_cloud(
+
+# ===== Weaviate v4 (Render SAFE) =====
+
+
+weaviate_client = connect_to_weaviate_cloud(
     cluster_url=WEAVIATE_URL,
-    auth_credentials=Auth.api_key(WEAVIATE_API_KEY)
+    auth_credentials=Auth.api_key(WEAVIATE_API_KEY),
 )
 
 if not weaviate_client.is_ready():
-    print("⚠️ Warning: Weaviate client not ready!")
+    print("⚠️ Weaviate client not ready")
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
