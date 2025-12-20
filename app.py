@@ -15,7 +15,6 @@ from weaviate import WeaviateClient
 from weaviate.connect import ConnectionParams
 from weaviate.auth import AuthApiKey
 
-
 # ---------------- CONFIG ----------------
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -35,14 +34,14 @@ app = Flask(__name__)
 # ---------------- GEMINI CLIENT ----------------
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ---------------- WEAVIATE CLIENT (v4) ----------------
+# ---------------- WEAVIATE CLIENT (v4 SAFE INIT) ----------------
 weaviate_client = WeaviateClient(
-    connection_params=ConnectionParams.from_url(
-        WEAVIATE_URL
-    ),
+    connection_params=ConnectionParams.from_url(WEAVIATE_URL),
     auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
 
+# 🔑 IMPORTANT: force connection at startup (prevents cold-start crash)
+weaviate_client.connect()
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
@@ -52,16 +51,20 @@ SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
 MAX_DOC_CHARS = 1500
 RATE_LIMIT_SECONDS = 5
 
-# ---------------- SCHEMA INIT ----------------
+# ---------------- SCHEMA INIT (SAFE) ----------------
 def init_schema():
-    if not weaviate_client.collections.exists("PDFChunk"):
-        weaviate_client.collections.create(
-            name="PDFChunk",
-            vectorizer_config=None,
-            properties=[
-                {"name": "text", "dataType": "text"}
-            ]
-        )
+    try:
+        if not weaviate_client.collections.exists("PDFChunk"):
+            weaviate_client.collections.create(
+                name="PDFChunk",
+                vectorizer_config=None,
+                properties=[
+                    {"name": "text", "dataType": "text"}
+                ]
+            )
+    except Exception as e:
+        # Do NOT crash app if schema already exists or during cold start
+        print("Schema init warning:", e)
 
 init_schema()
 
@@ -78,7 +81,8 @@ def embed(text):
         EMBED_CACHE[text] = res["embedding"]
         return EMBED_CACHE[text]
     except Exception as e:
-        raise RuntimeError(f"Embedding failed: {e}")
+        print("Embedding error:", e)
+        return None   # ⬅️ NEVER crash
 
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
@@ -93,36 +97,59 @@ def upload_file():
     path = os.path.join(UPLOAD_DIR, file.filename)
     file.save(path)
 
-    pdf = fitz.open(path)
-    collection = weaviate_client.collections.get("PDFChunk")
+    try:
+        pdf = fitz.open(path)
+        collection = weaviate_client.collections.get("PDFChunk")
 
-    with collection.batch.dynamic() as batch:
-        for page in pdf:
-            text = page.get_text().strip()
-            for chunk in chunk_text(text):
-                batch.add(
-                    properties={"text": chunk},
-                    vector=embed(chunk)
-                )
+        with collection.batch.dynamic() as batch:
+            for page in pdf:
+                text = page.get_text().strip()
+                if not text:
+                    continue
 
-    os.remove(path)
-    return {"message": "PDF indexed successfully (Weaviate Cloud)"}
+                for chunk in chunk_text(text):
+                    vec = embed(chunk)
+                    if vec is None:
+                        continue
+
+                    batch.add(
+                        properties={"text": chunk},
+                        vector=vec
+                    )
+
+        return {"message": "PDF indexed successfully (Weaviate Cloud)"}
+
+    except Exception as e:
+        print("Upload error:", e)
+        return {"error": str(e)}, 500
+
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
-    q_vec = embed(query)
-    collection = weaviate_client.collections.get("PDFChunk")
-
-    res = collection.query.near_vector(
-        near_vector=q_vec,
-        limit=1,
-        certainty=0.6
-    )
-
-    if not res.objects:
+    vec = embed(query)
+    if vec is None:
         return []
 
-    return [res.objects[0].properties["text"]]
+    try:
+        collection = weaviate_client.collections.get("PDFChunk")
+
+        res = collection.query.near_vector(
+            near_vector=vec,
+            limit=1,
+            certainty=0.6
+        )
+
+        if not res.objects:
+            return []
+
+        return [res.objects[0].properties["text"]]
+
+    except Exception as e:
+        print("Retrieve error:", e)
+        return []
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
@@ -145,26 +172,32 @@ Question:
             contents=prompt
         )
 
-        return response.text.strip() if response and response.text else None
+        if not response or not response.text:
+            return None
+
+        return response.text.strip()
 
     except Exception as e:
         print("Gemini error:", e)
-        return f"⚠️ Error generating answer: {e}"
+        return None
 
 # ---------------- WHATSAPP SEND ----------------
 def send_whatsapp(to, text):
-    url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": text[:4096]}
-    }
-    requests.post(url, headers=headers, json=payload)
+    try:
+        url = f"https://graph.facebook.com/v20.0/{PHONE_NUMBER_ID}/messages"
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "text",
+            "text": {"body": text[:4096]}
+        }
+        requests.post(url, headers=headers, json=payload, timeout=10)
+    except Exception as e:
+        print("WhatsApp send error:", e)
 
 # ---------------- MESSAGE WORKER ----------------
 def process_message(phone, text):
@@ -185,7 +218,10 @@ def process_message(phone, text):
         return
 
     answer = generate_answer(text, docs)
-    send_whatsapp(phone, answer or "⚠️ Unable to generate an answer right now.")
+    send_whatsapp(
+        phone,
+        answer or "⚠️ Unable to generate an answer right now."
+    )
 
 # ---------------- WEBHOOK ----------------
 @app.route("/webhook", methods=["GET"])
