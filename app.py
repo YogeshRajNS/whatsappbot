@@ -1,18 +1,22 @@
 # ==========================================
-# WhatsApp PDF RAG Chatbot (Weaviate Cloud)
+# WhatsApp PDF RAG Chatbot (Weaviate Cloud - SAFE)
 # ==========================================
 
-import os, threading, time, json
+import os, threading, time
 import fitz
 import requests
 from flask import Flask, request, make_response
-import google.generativeai as genai
-import weaviate
-from weaviate.auth import AuthApiKey
+
+# ===== Gemini NEW SDK =====
+from google import genai
+
+# ===== Weaviate v4 =====
+from weaviate import WeaviateClient
+from weaviate.connect import ConnectionParams
 
 # ---------------- CONFIG ----------------
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_123")
@@ -26,10 +30,15 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ---------------- APP ----------------
 app = Flask(__name__)
 
-# ---------------- WEAVIATE CLIENT ----------------
-client = weaviate.Client(
-    url=WEAVIATE_URL,
-    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
+# ---------------- GEMINI CLIENT ----------------
+genai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+# ---------------- WEAVIATE CLIENT (v4) ----------------
+weaviate_client = WeaviateClient(
+    connection_params=ConnectionParams.from_url(
+        WEAVIATE_URL,
+        api_key=WEAVIATE_API_KEY
+    )
 )
 
 # ---------------- GLOBAL STATE ----------------
@@ -42,14 +51,14 @@ RATE_LIMIT_SECONDS = 5
 
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
-    if not client.schema.exists("PDFChunk"):
-        client.schema.create_class({
-            "class": "PDFChunk",
-            "vectorizer": "none",
-            "properties": [
-                {"name": "text", "dataType": ["text"]}
+    if not weaviate_client.collections.exists("PDFChunk"):
+        weaviate_client.collections.create(
+            name="PDFChunk",
+            vectorizer_config=None,
+            properties=[
+                {"name": "text", "dataType": "text"}
             ]
-        })
+        )
 
 init_schema()
 
@@ -58,13 +67,15 @@ def embed(text):
     if text in EMBED_CACHE:
         return EMBED_CACHE[text]
 
-    emb = genai.embed_content(
-        model="models/text-embedding-004",
-        content=text
-    )["embedding"]
-
-    EMBED_CACHE[text] = emb
-    return emb
+    try:
+        res = genai_client.models.embed_content(
+            model="models/text-embedding-004",
+            content=text
+        )
+        EMBED_CACHE[text] = res["embedding"]
+        return EMBED_CACHE[text]
+    except Exception as e:
+        raise RuntimeError(f"Embedding failed: {e}")
 
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
@@ -80,33 +91,35 @@ def upload_file():
     file.save(path)
 
     pdf = fitz.open(path)
+    collection = weaviate_client.collections.get("PDFChunk")
 
-    with client.batch as batch:
-        batch.batch_size = 50
-
+    with collection.batch.dynamic() as batch:
         for page in pdf:
             text = page.get_text().strip()
             for chunk in chunk_text(text):
-                batch.add_data_object(
-                    data_object={"text": chunk},
-                    class_name="PDFChunk",
+                batch.add(
+                    properties={"text": chunk},
                     vector=embed(chunk)
                 )
 
     os.remove(path)
-    return {"message": "PDF indexed successfully (Weaviate)"}
+    return {"message": "PDF indexed successfully (Weaviate Cloud)"}
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
     q_vec = embed(query)
+    collection = weaviate_client.collections.get("PDFChunk")
 
-    res = client.query.get("PDFChunk", ["text"]) \
-        .with_near_vector({"vector": q_vec, "certainty": 0.6}) \
-        .with_limit(1) \
-        .do()
+    res = collection.query.near_vector(
+        near_vector=q_vec,
+        limit=1,
+        certainty=0.6
+    )
 
-    items = res.get("data", {}).get("Get", {}).get("PDFChunk", [])
-    return [item["text"]] if items else []
+    if not res.objects:
+        return []
+
+    return [res.objects[0].properties["text"]]
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
@@ -124,14 +137,16 @@ Question:
 {query}
 """
 
-        model = genai.GenerativeModel("models/gemini-2.0-flash")
-        res = model.generate_content(prompt)
+        response = genai_client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
 
-        return res.text.strip() if res and res.text else None
+        return response.text.strip() if response and response.text else None
 
     except Exception as e:
         print("Gemini error:", e)
-        return None
+        return f"⚠️ Error generating answer: {e}"
 
 # ---------------- WHATSAPP SEND ----------------
 def send_whatsapp(to, text):
@@ -167,10 +182,7 @@ def process_message(phone, text):
         return
 
     answer = generate_answer(text, docs)
-    send_whatsapp(
-        phone,
-        answer or "⚠️ Unable to generate an answer right now."
-    )
+    send_whatsapp(phone, answer or "⚠️ Unable to generate an answer right now.")
 
 # ---------------- WEBHOOK ----------------
 @app.route("/webhook", methods=["GET"])
@@ -206,7 +218,7 @@ def webhook():
 # ---------------- HEALTH ----------------
 @app.route("/")
 def health():
-    return "WhatsApp RAG Bot Running (Weaviate)", 200
+    return "WhatsApp RAG Bot Running (Weaviate Cloud v4)", 200
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
