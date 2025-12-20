@@ -1,12 +1,12 @@
 # ==========================================
-# WhatsApp PDF RAG Chatbot (Render Safe)
+# WhatsApp PDF RAG Chatbot (Production Safe)
 # ==========================================
 
-import os, json, threading
+import os, json, threading, time
 import fitz
 import numpy as np
 import requests
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, make_response
 import google.generativeai as genai
 
 # ---------------- CONFIG ----------------
@@ -24,6 +24,17 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # ---------------- APP ----------------
 app = Flask(__name__)
 
+# ---------------- GLOBAL STATE ----------------
+VECTOR_STORE = []
+EMBED_CACHE = {}
+LAST_MESSAGE = {}
+
+SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
+
+MAX_DOC_CHARS = 1500
+SIM_THRESHOLD = 0.6
+RATE_LIMIT_SECONDS = 5
+
 # ---------------- VECTOR STORE ----------------
 def load_store():
     if os.path.exists(STORE_FILE):
@@ -39,33 +50,42 @@ VECTOR_STORE = load_store()
 
 # ---------------- UTILS ----------------
 def embed(text):
+    if text in EMBED_CACHE:
+        return EMBED_CACHE[text]
+
     emb = genai.embed_content(
         model="models/text-embedding-004",
         content=text
-    )
-    return emb["embedding"]
+    )["embedding"]
+
+    EMBED_CACHE[text] = emb
+    return emb
 
 def cosine(a, b):
     a, b = np.array(a), np.array(b)
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+def chunk_text(text, size=400):
+    return [text[i:i + size] for i in range(0, len(text), size)]
 
 # ---------------- PDF INGEST ----------------
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
     file = request.files.get("file")
     if not file:
-        return {"error": "No file"}, 400
+        return {"error": "No file uploaded"}, 400
 
     path = os.path.join(UPLOAD_DIR, file.filename)
     file.save(path)
 
     pdf = fitz.open(path)
+
     for page in pdf:
         text = page.get_text().strip()
-        if text:
+        for chunk in chunk_text(text):
             VECTOR_STORE.append({
-                "text": text,
-                "vector": embed(text)
+                "text": chunk,
+                "vector": embed(chunk)
             })
 
     save_store(VECTOR_STORE)
@@ -74,32 +94,49 @@ def upload_file():
     return {"message": "PDF indexed successfully"}
 
 # ---------------- RETRIEVAL ----------------
-def retrieve(query, top_k=3):
+def retrieve(query):
     q_vec = embed(query)
+
     scored = [
         (cosine(q_vec, item["vector"]), item["text"])
         for item in VECTOR_STORE
     ]
+
     scored.sort(reverse=True)
-    return [t for _, t in scored[:top_k]]
+
+    if not scored or scored[0][0] < SIM_THRESHOLD:
+        return []
+
+    return [scored[0][1]]  # top_k = 1
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
     try:
+        docs_text = "\n".join(docs)[:MAX_DOC_CHARS]
+
         prompt = f"""
-        Answer ONLY from the document content.
-        
-        Document:
-        {chr(10).join(docs)}
-        
-        Question:
-        {query}
-        """
+Answer ONLY using the document below.
+If the answer is not present, say "Not available in the document".
+
+Document:
+{docs_text}
+
+Question:
+{query}
+"""
+
         model = genai.GenerativeModel("models/gemini-2.0-flash")
         res = model.generate_content(prompt)
+
+        if not res or not res.text:
+            return None
+
         return res.text.strip()
+
     except Exception as e:
-        return str(e)
+        # Log error internally (Render logs)
+        print("Gemini error:", e)
+        return None
 
 # ---------------- WHATSAPP SEND ----------------
 def send_whatsapp(to, text):
@@ -116,8 +153,21 @@ def send_whatsapp(to, text):
     }
     requests.post(url, headers=headers, json=payload)
 
-# ---------------- BACKGROUND WORKER ----------------
+# ---------------- MESSAGE WORKER ----------------
 def process_message(phone, text):
+    now = time.time()
+
+    # Rate limit
+    if phone in LAST_MESSAGE and now - LAST_MESSAGE[phone] < RATE_LIMIT_SECONDS:
+        send_whatsapp(phone, "⏳ Please wait a few seconds before asking again.")
+        return
+    LAST_MESSAGE[phone] = now
+
+    # Small talk bypass
+    if text.lower().strip() in SMALL_TALK:
+        send_whatsapp(phone, "Hi 👋 Ask a question about the uploaded PDF.")
+        return
+
     if not VECTOR_STORE:
         send_whatsapp(phone, "No PDF uploaded yet. Please upload a PDF first.")
         return
@@ -128,52 +178,51 @@ def process_message(phone, text):
         return
 
     answer = generate_answer(text, docs)
-    send_whatsapp(phone, answer or "Unable to generate answer.")
 
-# ---------------- WEBHOOK ----------------
+    if not answer:
+        send_whatsapp(
+            phone,
+            "⚠️ I'm unable to generate an answer right now. Please try again shortly."
+        )
+        return
+
+    send_whatsapp(phone, answer)
+
+# ---------------- WEBHOOK VERIFY ----------------
 @app.route("/webhook", methods=["GET"])
 def verify():
     if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return make_response(request.args.get("hub.challenge"), 200)
     return "Forbidden", 403
 
+# ---------------- WEBHOOK RECEIVE ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    
-    # Debug: This lets you see the payload in your Render logs
-    print(f"Incoming Payload: {json.dumps(data)}")
+    print("Incoming payload:", json.dumps(data))
 
     try:
-        # Step-by-step extraction based on your specific JSON:
         entry = data.get("entry", [{}])[0]
         changes = entry.get("changes", [{}])[0]
         value = changes.get("value", {})
-        
-        # Meta sends 'statuses' (sent/delivered) and 'messages' (incoming text).
-        # We only care about 'messages'.
         messages = value.get("messages")
 
         if messages:
-            message = messages[0]
-            phone = message.get("from") # In your case: "918121676994"
-            
-            # Check if the message type is 'text'
-            if message.get("type") == "text":
-                user_text = message.get("text", {}).get("body") # In your case: "What is in the pdf"
-                
-                print(f"Found Message: '{user_text}' from {phone}")
+            msg = messages[0]
+            phone = msg.get("from")
 
-                # Start your RAG/Gemini logic in a background thread
+            if msg.get("type") == "text":
+                user_text = msg.get("text", {}).get("body")
+
                 threading.Thread(
                     target=process_message,
-                    args=(phone, user_text)
+                    args=(phone, user_text),
+                    daemon=True
                 ).start()
 
     except Exception as e:
-        print(f"Error parsing JSON: {e}")
+        print("Webhook parse error:", e)
 
-    # ALWAYS return 200 OK to Meta immediately
     return "ok", 200
 
 # ---------------- HEALTH ----------------
