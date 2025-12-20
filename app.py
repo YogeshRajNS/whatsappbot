@@ -99,6 +99,7 @@ def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
 
 # ---------------- PDF INGEST ----------------
+# ---------------- PDF INGEST ----------------
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
     file = request.files.get("file")
@@ -115,26 +116,22 @@ def upload_file():
         # Ensure client is connected
         weaviate_client.connect()
 
-        # Prepare objects for batch
-        objects_to_add = []
-        for page in pdf:
-            text = page.get_text().strip()
-            if not text:
-                continue
-
-            for chunk in chunk_text(text):
-                vec = embed(chunk)
-                if vec is None:
+        # Use SAFE v4 dynamic batch context
+        with collection.batch.dynamic() as batch:
+            for page in pdf:
+                text = page.get_text().strip()
+                if not text:
                     continue
 
-                objects_to_add.append({
-                    "class": "PDFChunk",
-                    "properties": {"text": chunk},
-                    "vector": vec
-                })
+                for chunk in chunk_text(text):
+                    vec = embed(chunk)
+                    if vec is None:
+                        continue
 
-        if objects_to_add:
-            collection.batch.add_objects(objects_to_add)  # v4 SAFE
+                    batch.add(
+                        properties={"text": chunk},
+                        vector=vec
+                    )
 
         return {"message": "PDF indexed successfully (Weaviate Cloud)"}
 
@@ -145,6 +142,7 @@ def upload_file():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
 
 
 # ---------------- RETRIEVAL ----------------
