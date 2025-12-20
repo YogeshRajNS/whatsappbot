@@ -40,10 +40,10 @@ weaviate_client = WeaviateClient(
     connection_params=ConnectionParams(
         http=ProtocolParams(
             host=WEAVIATE_URL,
-            port=443,     # must explicitly set port
-            secure=True   # HTTPS
-        ),
-        grpc=None       # disable gRPC
+            port=443,      # mandatory
+            secure=True    # HTTPS
+        )
+        # omit grpc entirely for REST-only
     ),
     auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
