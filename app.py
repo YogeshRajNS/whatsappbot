@@ -11,6 +11,7 @@ from flask import Flask, request, make_response
 from google import genai
 
 # ===== Weaviate v4 =====
+import weaviate
 from weaviate import connect_to_weaviate_cloud
 from weaviate.classes.init import Auth
 
