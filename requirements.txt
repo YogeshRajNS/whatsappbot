@@ -1,10 +1,7 @@
-flask-cors
-numpy
-flask==3.0.3
-gunicorn==21.2.0
-requests==2.32.3
-pymupdf==1.24.10
 weaviate-client==4.5.4
 google-genai==0.3.0
-
-
+flask==3.0.3
+gunicorn==21.2.0
+pymupdf==1.24.10
+numpy==1.26.4
+requests==2.32.3
