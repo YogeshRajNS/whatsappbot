@@ -1,13 +1,14 @@
 # ==========================================
-# WhatsApp PDF RAG Chatbot (Production Safe)
+# WhatsApp PDF RAG Chatbot (Weaviate Cloud)
 # ==========================================
 
-import os, json, threading, time
+import os, threading, time, json
 import fitz
-import numpy as np
 import requests
 from flask import Flask, request, make_response
 import google.generativeai as genai
+import weaviate
+from weaviate.auth import AuthApiKey
 
 # ---------------- CONFIG ----------------
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
@@ -16,37 +17,41 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_123")
 
-UPLOAD_DIR = "uploads"
-STORE_FILE = "vector_store.json"
+WEAVIATE_URL = os.getenv("WEAVIATE_URL")
+WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 
+UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ---------------- APP ----------------
 app = Flask(__name__)
 
+# ---------------- WEAVIATE CLIENT ----------------
+client = weaviate.Client(
+    url=WEAVIATE_URL,
+    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
+)
+
 # ---------------- GLOBAL STATE ----------------
-VECTOR_STORE = []
 EMBED_CACHE = {}
 LAST_MESSAGE = {}
 
 SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
-
 MAX_DOC_CHARS = 1500
-SIM_THRESHOLD = 0.6
 RATE_LIMIT_SECONDS = 5
 
-# ---------------- VECTOR STORE ----------------
-def load_store():
-    if os.path.exists(STORE_FILE):
-        with open(STORE_FILE, "r") as f:
-            return json.load(f)
-    return []
+# ---------------- SCHEMA INIT ----------------
+def init_schema():
+    if not client.schema.exists("PDFChunk"):
+        client.schema.create_class({
+            "class": "PDFChunk",
+            "vectorizer": "none",
+            "properties": [
+                {"name": "text", "dataType": ["text"]}
+            ]
+        })
 
-def save_store(data):
-    with open(STORE_FILE, "w") as f:
-        json.dump(data, f)
-
-VECTOR_STORE = load_store()
+init_schema()
 
 # ---------------- UTILS ----------------
 def embed(text):
@@ -60,10 +65,6 @@ def embed(text):
 
     EMBED_CACHE[text] = emb
     return emb
-
-def cosine(a, b):
-    a, b = np.array(a), np.array(b)
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
@@ -80,34 +81,32 @@ def upload_file():
 
     pdf = fitz.open(path)
 
-    for page in pdf:
-        text = page.get_text().strip()
-        for chunk in chunk_text(text):
-            VECTOR_STORE.append({
-                "text": chunk,
-                "vector": embed(chunk)
-            })
+    with client.batch as batch:
+        batch.batch_size = 50
 
-    save_store(VECTOR_STORE)
+        for page in pdf:
+            text = page.get_text().strip()
+            for chunk in chunk_text(text):
+                batch.add_data_object(
+                    data_object={"text": chunk},
+                    class_name="PDFChunk",
+                    vector=embed(chunk)
+                )
+
     os.remove(path)
-
-    return {"message": "PDF indexed successfully"}
+    return {"message": "PDF indexed successfully (Weaviate)"}
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
     q_vec = embed(query)
 
-    scored = [
-        (cosine(q_vec, item["vector"]), item["text"])
-        for item in VECTOR_STORE
-    ]
+    res = client.query.get("PDFChunk", ["text"]) \
+        .with_near_vector({"vector": q_vec, "certainty": 0.6}) \
+        .with_limit(1) \
+        .do()
 
-    scored.sort(reverse=True)
-
-    if not scored or scored[0][0] < SIM_THRESHOLD:
-        return []
-
-    return [scored[0][1]]  # top_k = 1
+    items = res.get("data", {}).get("Get", {}).get("PDFChunk", [])
+    return [item["text"]] if items else []
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
@@ -116,7 +115,7 @@ def generate_answer(query, docs):
 
         prompt = f"""
 Answer ONLY using the document below.
-If the answer is not present, say "Not available in the document".
+If not found, say "Not available in the document".
 
 Document:
 {docs_text}
@@ -128,13 +127,9 @@ Question:
         model = genai.GenerativeModel("models/gemini-2.0-flash")
         res = model.generate_content(prompt)
 
-        if not res or not res.text:
-            return None
-
-        return res.text.strip()
+        return res.text.strip() if res and res.text else None
 
     except Exception as e:
-        # Log error internally (Render logs)
         print("Gemini error:", e)
         return None
 
@@ -157,19 +152,13 @@ def send_whatsapp(to, text):
 def process_message(phone, text):
     now = time.time()
 
-    # Rate limit
     if phone in LAST_MESSAGE and now - LAST_MESSAGE[phone] < RATE_LIMIT_SECONDS:
-        send_whatsapp(phone, "⏳ Please wait a few seconds before asking again.")
+        send_whatsapp(phone, "⏳ Please wait a few seconds.")
         return
     LAST_MESSAGE[phone] = now
 
-    # Small talk bypass
     if text.lower().strip() in SMALL_TALK:
-        send_whatsapp(phone, "Hi 👋 Ask a question about the uploaded PDF.")
-        return
-
-    if not VECTOR_STORE:
-        send_whatsapp(phone, "No PDF uploaded yet. Please upload a PDF first.")
+        send_whatsapp(phone, "Hi 👋 Ask a question about the PDF.")
         return
 
     docs = retrieve(text)
@@ -178,28 +167,21 @@ def process_message(phone, text):
         return
 
     answer = generate_answer(text, docs)
+    send_whatsapp(
+        phone,
+        answer or "⚠️ Unable to generate an answer right now."
+    )
 
-    if not answer:
-        send_whatsapp(
-            phone,
-            "⚠️ I'm unable to generate an answer right now. Please try again shortly."
-        )
-        return
-
-    send_whatsapp(phone, answer)
-
-# ---------------- WEBHOOK VERIFY ----------------
+# ---------------- WEBHOOK ----------------
 @app.route("/webhook", methods=["GET"])
 def verify():
     if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return make_response(request.args.get("hub.challenge"), 200)
     return "Forbidden", 403
 
-# ---------------- WEBHOOK RECEIVE ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("Incoming payload:", json.dumps(data))
 
     try:
         entry = data.get("entry", [{}])[0]
@@ -209,26 +191,22 @@ def webhook():
 
         if messages:
             msg = messages[0]
-            phone = msg.get("from")
-
             if msg.get("type") == "text":
-                user_text = msg.get("text", {}).get("body")
-
                 threading.Thread(
                     target=process_message,
-                    args=(phone, user_text),
+                    args=(msg["from"], msg["text"]["body"]),
                     daemon=True
                 ).start()
 
     except Exception as e:
-        print("Webhook parse error:", e)
+        print("Webhook error:", e)
 
     return "ok", 200
 
 # ---------------- HEALTH ----------------
 @app.route("/")
 def health():
-    return "WhatsApp RAG Bot Running", 200
+    return "WhatsApp RAG Bot Running (Weaviate)", 200
 
 # ---------------- RUN ----------------
 if __name__ == "__main__":
