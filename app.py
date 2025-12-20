@@ -95,7 +95,7 @@ def generate_answer(query, docs):
         Question:
         {query}
         """
-        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        model = genai.GenerativeModel("models/gemini-2.0-flash")
         res = model.generate_content(prompt)
         return res.text.strip()
     except Exception as e:
