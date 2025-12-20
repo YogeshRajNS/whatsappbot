@@ -36,14 +36,10 @@ genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------- WEAVIATE CLIENT (v4 SAFE INIT) ----------------
 weaviate_client = WeaviateClient(
-    connection_params=ConnectionParams.from_url(
-        WEAVIATE_URL,
-        grpc_port=50051
-    ),
-    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
+    connection_params=ConnectionParams.from_url(WEAVIATE_URL),  # REST URL only
+    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY),
+    skip_init_checks=True  # skips gRPC health check
 )
-
-weaviate_client.connect()
 
 
 # ---------------- GLOBAL STATE ----------------
