@@ -111,22 +111,30 @@ def upload_file():
     try:
         pdf = fitz.open(path)
         collection = weaviate_client.collections.get("PDFChunk")
+        
+        # Ensure client is connected
+        weaviate_client.connect()
 
-        with collection.batch.dynamic() as batch:
-            for page in pdf:
-                text = page.get_text().strip()
-                if not text:
+        # Prepare objects for batch
+        objects_to_add = []
+        for page in pdf:
+            text = page.get_text().strip()
+            if not text:
+                continue
+
+            for chunk in chunk_text(text):
+                vec = embed(chunk)
+                if vec is None:
                     continue
 
-                for chunk in chunk_text(text):
-                    vec = embed(chunk)
-                    if vec is None:
-                        continue
+                objects_to_add.append({
+                    "class": "PDFChunk",
+                    "properties": {"text": chunk},
+                    "vector": vec
+                })
 
-                    batch.add_data_object(
-                        properties={"text": chunk},
-                        vector=vec
-                    )
+        if objects_to_add:
+            collection.batch.add_objects(objects_to_add)  # v4 SAFE
 
         return {"message": "PDF indexed successfully (Weaviate Cloud)"}
 
@@ -137,6 +145,7 @@ def upload_file():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
