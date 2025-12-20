@@ -85,18 +85,21 @@ def retrieve(query, top_k=3):
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
-    prompt = f"""
-Answer ONLY from the document content.
-
-Document:
-{chr(10).join(docs)}
-
-Question:
-{query}
-"""
-    model = genai.GenerativeModel("models/gemini-2.5-flash")
-    res = model.generate_content(prompt)
-    return res.text.strip()
+    try:
+        prompt = f"""
+        Answer ONLY from the document content.
+        
+        Document:
+        {chr(10).join(docs)}
+        
+        Question:
+        {query}
+        """
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        res = model.generate_content(prompt)
+        return res.text.strip()
+    except Exception as e:
+        return str(e)
 
 # ---------------- WHATSAPP SEND ----------------
 def send_whatsapp(to, text):
