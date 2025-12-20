@@ -2,7 +2,7 @@
 # WhatsApp PDF RAG Chatbot (Weaviate Cloud - SAFE)
 # ==========================================
 
-import os, threading, time
+import os, threading, time, json
 import fitz
 import requests
 from flask import Flask, request, make_response
@@ -10,10 +10,10 @@ from flask import Flask, request, make_response
 # ===== Gemini NEW SDK =====
 from google import genai
 
-# ===== Weaviate v4 =====
-import weaviate
-from weaviate import connect_to_weaviate_cloud
-from weaviate.classes.init import Auth
+# ===== Weaviate v4 (CORRECT IMPORTS) =====
+from weaviate import WeaviateClient
+from weaviate.connect import ConnectionParams, ProtocolParams
+from weaviate.auth import AuthApiKey
 
 # ---------------- CONFIG ----------------
 
@@ -22,7 +22,7 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_123")
 
-WEAVIATE_URL = os.getenv("WEAVIATE_URL")
+WEAVIATE_URL = os.getenv("WEAVIATE_URL")  # ex: xyz.weaviate.network
 WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 
 UPLOAD_DIR = "uploads"
@@ -34,18 +34,20 @@ app = Flask(__name__)
 # ---------------- GEMINI CLIENT ----------------
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ---------------- WEAVIATE CLIENT (v4 SAFE INIT) ----------------
-
-# ===== Weaviate v4 (Render SAFE) =====
-
-
-weaviate_client = connect_to_weaviate_cloud(
-    cluster_url=WEAVIATE_URL,
-    auth_credentials=Auth.api_key(WEAVIATE_API_KEY),
+# ---------------- WEAVIATE CLIENT (REAL v4 SAFE WAY) ----------------
+weaviate_client = WeaviateClient(
+    connection_params=ConnectionParams(
+        http=ProtocolParams(
+            host=WEAVIATE_URL.replace("https://", ""),
+            port=443,
+            secure=True
+        ),
+        grpc=None  # 🚫 Disable gRPC completely (Render safe)
+    ),
+    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
 
-if not weaviate_client.is_ready():
-    print("⚠️ Weaviate client not ready")
+weaviate_client.connect()
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
@@ -55,7 +57,7 @@ SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
 MAX_DOC_CHARS = 1500
 RATE_LIMIT_SECONDS = 5
 
-# ---------------- SCHEMA INIT (SAFE) ----------------
+# ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
         if not weaviate_client.collections.exists("PDFChunk"):
@@ -67,7 +69,6 @@ def init_schema():
                 ]
             )
     except Exception as e:
-        # Do NOT crash app if schema already exists or during cold start
         print("Schema init warning:", e)
 
 init_schema()
@@ -80,12 +81,10 @@ def embed(text):
     try:
         res = genai_client.models.embed_content(
             model="models/text-embedding-004",
-            contents=[text]  # list of strings
+            contents=[text]
         )
-        # Extract embedding properly
         EMBED_CACHE[text] = res.embeddings[0]
         return EMBED_CACHE[text]
-
     except Exception as e:
         print("Embedding error:", e)
         return None
@@ -107,7 +106,6 @@ def upload_file():
         pdf = fitz.open(path)
         collection = weaviate_client.collections.get("PDFChunk")
 
-        # Use SAFE v4 dynamic batch context
         with collection.batch.dynamic() as batch:
             for page in pdf:
                 text = page.get_text().strip()
@@ -124,7 +122,7 @@ def upload_file():
                         vector=vec
                     )
 
-        return {"message": "PDF indexed successfully (Weaviate Cloud)"}
+        return {"message": "PDF indexed successfully"}
 
     except Exception as e:
         print("Upload error:", e)
@@ -142,7 +140,6 @@ def retrieve(query):
 
     try:
         collection = weaviate_client.collections.get("PDFChunk")
-
         res = collection.query.near_vector(
             near_vector=vec,
             limit=1,
@@ -153,7 +150,6 @@ def retrieve(query):
             return []
 
         return [res.objects[0].properties["text"]]
-
     except Exception as e:
         print("Retrieve error:", e)
         return []
@@ -162,7 +158,6 @@ def retrieve(query):
 def generate_answer(query, docs):
     try:
         docs_text = "\n".join(docs)[:MAX_DOC_CHARS]
-
         prompt = f"""
 Answer ONLY using the document below.
 If not found, say "Not available in the document".
@@ -173,17 +168,11 @@ Document:
 Question:
 {query}
 """
-
         response = genai_client.models.generate_content(
             model="gemini-2.0-flash",
             contents=prompt
         )
-
-        if not response or not response.text:
-            return None
-
-        return response.text.strip()
-
+        return response.text.strip() if response and response.text else None
     except Exception as e:
         print("Gemini error:", e)
         return None
@@ -221,14 +210,11 @@ def process_message(phone, text):
 
     docs = retrieve(text)
     if not docs:
-        send_whatsapp(phone, "No relevant information found in the document.")
+        send_whatsapp(phone, "No relevant information found.")
         return
 
     answer = generate_answer(text, docs)
-    send_whatsapp(
-        phone,
-        answer or "⚠️ Unable to generate an answer right now."
-    )
+    send_whatsapp(phone, answer or "⚠️ Unable to generate answer.")
 
 # ---------------- WEBHOOK ----------------
 @app.route("/webhook", methods=["GET"])
@@ -237,14 +223,10 @@ def verify():
         return make_response(request.args.get("hub.challenge"), 200)
     return "Forbidden", 403
 
-# ---------------- WEBHOOK ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("Incoming payload:", json.dumps(data))  # debug
-
     try:
-        # Safely extract messages
         entry = data.get("entry", [{}])[0]
         changes = entry.get("changes", [{}])[0]
         value = changes.get("value", {})
@@ -253,17 +235,13 @@ def webhook():
         if messages:
             msg = messages[0]
             phone = msg.get("from")
-            msg_type = msg.get("type")
-
-            if msg_type == "text":
-                user_text = msg.get("text", {}).get("body")
-                if user_text:
-                    threading.Thread(
-                        target=process_message,
-                        args=(phone, user_text),
-                        daemon=True
-                    ).start()
-
+            if msg.get("type") == "text":
+                text = msg.get("text", {}).get("body")
+                threading.Thread(
+                    target=process_message,
+                    args=(phone, text),
+                    daemon=True
+                ).start()
     except Exception as e:
         print("Webhook parse error:", e)
 
@@ -272,8 +250,4 @@ def webhook():
 # ---------------- HEALTH ----------------
 @app.route("/")
 def health():
-    return "WhatsApp RAG Bot Running (Weaviate Cloud v4)", 200
-
-# ---------------- RUN ----------------
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    return "WhatsApp RAG Bot Running (Weaviate v4)", 200
