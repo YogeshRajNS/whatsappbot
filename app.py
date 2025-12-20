@@ -119,11 +119,11 @@ def upload_file():
                     continue
 
                 for chunk in chunk_text(text):
-                    vec = embed(chunk)  # ✅ now works
+                    vec = embed(chunk)
                     if vec is None:
                         continue
 
-                    batch.add(
+                    batch.add_data_object(
                         properties={"text": chunk},
                         vector=vec
                     )
