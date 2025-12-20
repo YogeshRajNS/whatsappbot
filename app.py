@@ -117,7 +117,7 @@ def upload_file():
                     continue
 
                 for chunk in chunk_text(text):
-                    vec = embed(chunk)
+                    vec = embed(chunk)  # ✅ now works
                     if vec is None:
                         continue
 
