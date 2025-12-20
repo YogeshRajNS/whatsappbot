@@ -85,13 +85,15 @@ def embed(text):
     try:
         res = genai_client.models.embed_content(
             model="models/text-embedding-004",
-            contents=text
+            contents=[text]  # list of strings
         )
-        EMBED_CACHE[text] = res["embedding"]
+        # Extract embedding properly
+        EMBED_CACHE[text] = res.embeddings[0]  # ⬅️ use .embeddings
         return EMBED_CACHE[text]
+
     except Exception as e:
         print("Embedding error:", e)
-        return None   # ⬅️ NEVER crash
+        return None
 
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
