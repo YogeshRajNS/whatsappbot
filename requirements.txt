@@ -1,9 +1,10 @@
-flask
 flask-cors
-requests
-pymupdf
 numpy
-google-generativeai
-gunicorn
-weaviate-client
+flask==3.0.3
+gunicorn==21.2.0
+requests==2.32.3
+pymupdf==1.24.10
+weaviate-client==4.5.4
+google-genai==0.3.0
+
 
