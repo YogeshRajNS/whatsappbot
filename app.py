@@ -127,10 +127,8 @@ def upload_file():
 def retrieve(query):
     try:
         pdf_collection = weaviate_client.collections.use("PDFChunk")
-        response = pdf_collection.query.near_text(
-            {"concepts": [query]},  # correct v5 syntax
-            limit=1
-        )
+        # In v5, near_text expects a string or list of strings
+        response = pdf_collection.query.near_text(query, limit=1)
         objs = response.objects
         if not objs:
             return []
@@ -138,6 +136,7 @@ def retrieve(query):
     except Exception as e:
         print("Retrieve error:", e)
         return []
+
 
 
 
