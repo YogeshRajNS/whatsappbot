@@ -1,30 +1,31 @@
 # ==========================================
-# WhatsApp PDF RAG Chatbot (Weaviate Cloud - SAFE)
+# WhatsApp PDF RAG Chatbot (Weaviate Cloud v4)
 # ==========================================
 
-import os, threading, time, json
+import os, threading, time
 import fitz
 import requests
 from flask import Flask, request, make_response
+from dotenv import load_dotenv
 
 # ===== Gemini NEW SDK =====
 from google import genai
 
-# ===== Weaviate v4 (CORRECT IMPORTS) =====
-from weaviate import Client
+# ===== Weaviate v4 =====
+from weaviate import WeaviateClient
 from weaviate.auth import AuthApiKey
-from dotenv import load_dotenv
+import weaviate
+from weaviate.classes.init import Auth
+
 load_dotenv()
 
-
 # ---------------- CONFIG ----------------
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_123")
 
-WEAVIATE_URL = os.getenv("WEAVIATE_URL")  # ex: xyz.weaviate.network
+WEAVIATE_URL = os.getenv("WEAVIATE_URL")  # Full URL with https://
 WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 
 UPLOAD_DIR = "uploads"
@@ -36,24 +37,20 @@ app = Flask(__name__)
 # ---------------- GEMINI CLIENT ----------------
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ---------------- WEAVIATE CLIENT (REAL v4 SAFE WAY) ----------------
 # ---------------- WEAVIATE CLIENT ----------------
 
-weaviate_client = Client(
-    url=WEAVIATE_URL,
-    auth_client_secret=AuthApiKey(api_key=WEAVIATE_API_KEY)
+weaviate_client = weaviate.connect_to_weaviate_cloud(
+    cluster_url=WEAVIATE_URL,
+    auth_credentials=Auth.api_key(WEAVIATE_API_KEY)
 )
 
+# Optionally check readiness
 if not weaviate_client.is_ready():
     raise RuntimeError("Weaviate client not ready")
-
-# 🔐 IMPORTANT: close client cleanly when app stops
-
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
 LAST_MESSAGE = {}
-
 SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
 MAX_DOC_CHARS = 1500
 RATE_LIMIT_SECONDS = 5
@@ -61,17 +58,13 @@ RATE_LIMIT_SECONDS = 5
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
-        # Check if class exists
         existing_classes = [c["class"] for c in weaviate_client.schema.get()["classes"]]
         if "PDFChunk" not in existing_classes:
             weaviate_client.schema.create_class({
                 "class": "PDFChunk",
-                "vectorizer": "none",  # disables automatic vectorization
+                "vectorizer": "none",  # disable automatic vectorization
                 "properties": [
-                    {
-                        "name": "text",
-                        "dataType": ["text"]
-                    }
+                    {"name": "text", "dataType": ["text"]}
                 ]
             })
             print("PDFChunk class created successfully")
@@ -84,7 +77,6 @@ init_schema()
 def embed(text):
     if text in EMBED_CACHE:
         return EMBED_CACHE[text]
-
     try:
         res = genai_client.models.embed_content(
             model="models/text-embedding-004",
@@ -111,10 +103,8 @@ def upload_file():
 
     try:
         pdf = fitz.open(path)
-        collection = weaviate_client.collections.get("PDFChunk")
-
         with weaviate_client.batch as batch:
-            batch.batch_size = 100  # optional
+            batch.batch_size = 100
             for page in pdf:
                 text = page.get_text().strip()
                 if not text:
@@ -128,14 +118,10 @@ def upload_file():
                         class_name="PDFChunk",
                         vector=vec
                     )
-
-
         return {"message": "PDF indexed successfully"}
-
     except Exception as e:
         print("Upload error:", e)
         return {"error": str(e)}, 500
-
     finally:
         if os.path.exists(path):
             os.remove(path)
@@ -147,17 +133,18 @@ def retrieve(query):
         return []
 
     try:
-        collection = weaviate_client.collections.get("PDFChunk")
-        res = collection.query.near_vector(
-            near_vector=vec,
-            limit=1,
-            certainty=0.6
+        res = (
+            weaviate_client.query
+            .get("PDFChunk", ["text"])
+            .with_near_vector({"vector": vec})
+            .with_limit(1)
+            .do()
         )
 
-        if not res.objects:
+        objs = res.get("data", {}).get("Get", {}).get("PDFChunk", [])
+        if not objs:
             return []
-
-        return [res.objects[0].properties["text"]]
+        return [objs[0]["text"]]
     except Exception as e:
         print("Retrieve error:", e)
         return []
@@ -206,7 +193,6 @@ def send_whatsapp(to, text):
 # ---------------- MESSAGE WORKER ----------------
 def process_message(phone, text):
     now = time.time()
-
     if phone in LAST_MESSAGE and now - LAST_MESSAGE[phone] < RATE_LIMIT_SECONDS:
         send_whatsapp(phone, "⏳ Please wait a few seconds.")
         return
@@ -252,10 +238,13 @@ def webhook():
                 ).start()
     except Exception as e:
         print("Webhook parse error:", e)
-
     return "ok", 200
 
 # ---------------- HEALTH ----------------
 @app.route("/")
 def health():
     return "WhatsApp RAG Bot Running (Weaviate v4)", 200
+
+# ---------------- RUN APP ----------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
