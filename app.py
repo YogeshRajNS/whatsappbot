@@ -86,6 +86,13 @@ def embed(text):
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
 
+def extract_text(page):
+    text = page.get_text("text").strip()
+    if len(text) < 50:  # garbage protection (ID, page no, etc.)
+        blocks = page.get_text("blocks")
+        text = " ".join(b[4] for b in blocks if b[4].strip())
+    return text
+
 # ---------------- PDF INGEST ----------------
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
@@ -103,7 +110,7 @@ def upload_file():
 
         with pdf_collection.batch.fixed_size(batch_size=200) as batch:
             for page in pdf:
-                text = page.get_text().strip()
+                text = extract_text(page).strip()
                 if not text:
                     continue
                 for chunk in chunk_text(text):
