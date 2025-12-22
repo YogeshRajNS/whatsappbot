@@ -70,16 +70,23 @@ init_schema()
 def embed(text):
     if text in EMBED_CACHE:
         return EMBED_CACHE[text]
+
     try:
         res = genai_client.models.embed_content(
             model="models/text-embedding-004",
             contents=[text]
         )
-        EMBED_CACHE[text] = res.embeddings[0]
-        return EMBED_CACHE[text]
+
+        # ✅ IMPORTANT: extract vector values
+        vector = res.embeddings[0].values
+
+        EMBED_CACHE[text] = vector
+        return vector
+
     except Exception as e:
         print("Embedding error:", e)
         return None
+
 
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
