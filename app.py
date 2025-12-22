@@ -135,7 +135,7 @@ def retrieve(query):
 
         # Let Weaviate vectorizer handle the query
         response = pdf_collection.query.near_text(
-            {"concepts": [query]},  # v5 syntax
+            [query],  # pass as a list of strings
             limit=1
         )
 
