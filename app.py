@@ -56,19 +56,9 @@ RATE_LIMIT_SECONDS = 5
 def init_schema():
     try:
         pdf_collection = weaviate_client.collections.use("PDFChunk")
-    except Exception:
-        # Create collection if it doesn't exist with a vectorizer
-        # Delete old collection
-        weaviate_client.collections.delete("PDFChunk")
-        
-        # Recreate with vectorizer
-        pdf_collection = weaviate_client.collections.create(
-            name="PDFChunk",
-            vector_config=Configure.Vectors.text2vec_weaviate()
-        )
-
-        print("PDFChunk collection created successfully")
-
+        print("Using existing PDFChunk collection")
+    except Exception as e:
+        print("Collection not found:", e)
 init_schema()
 
 # ---------------- UTILS ----------------
@@ -137,19 +127,14 @@ def upload_file():
 def retrieve(query):
     try:
         pdf_collection = weaviate_client.collections.use("PDFChunk")
-
-        # Let Weaviate vectorizer handle the query
         response = pdf_collection.query.near_text(
-            [query],  # pass as a list of strings
+            {"concepts": [query]},  # correct v5 syntax
             limit=1
         )
-
         objs = response.objects
         if not objs:
             return []
-
         return [objs[0].properties["text"]]
-
     except Exception as e:
         print("Retrieve error:", e)
         return []
