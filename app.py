@@ -42,7 +42,6 @@ weaviate_client = weaviate.connect_to_weaviate_cloud(
     auth_credentials=AuthApiKey(WEAVIATE_API_KEY)
 )
 
-# Optionally check readiness
 if not weaviate_client.is_ready():
     raise RuntimeError("Weaviate client not ready")
 
@@ -58,7 +57,7 @@ def init_schema():
     try:
         pdf_collection = weaviate_client.collections.use("PDFChunk")
     except Exception:
-        # Create collection if it doesn't exist
+        # Create collection if it doesn't exist with a vectorizer
         pdf_collection = weaviate_client.collections.create(
             name="PDFChunk",
             vector_config=Configure.Vectors.text2vec_weaviate()
@@ -106,7 +105,7 @@ def upload_file():
                 if not text:
                     continue
                 for chunk in chunk_text(text):
-                    # No need to manually pass vector if collection vectorizer is enabled
+                    # Let the collection vectorizer handle vectorization
                     batch.add_object(properties={"text": chunk})
 
         return {"message": "PDF indexed successfully"}
