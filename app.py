@@ -55,17 +55,16 @@ RATE_LIMIT_SECONDS = 5
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
-        schema = weaviate_client.schema.get()  # method, not attribute
+        schema = weaviate_client.schema_api.get()
         existing_classes = [c["class"] for c in schema.get("classes", [])]
+        
         if "PDFChunk" not in existing_classes:
-            weaviate_client.schema.create_class({
+            weaviate_client.schema_api.create_class({
                 "class": "PDFChunk",
-                "vectorizer": "none",  # disable automatic vectorization
-                "properties": [
-                    {"name": "text", "dataType": ["text"]}
-                ]
+                "vectorizer": "none",
+                "properties": [{"name": "text", "dataType": ["text"]}]
             })
-            print("PDFChunk class created successfully")
+                    print("PDFChunk class created successfully")
     except Exception as e:
         print("Schema init warning:", e)
 
