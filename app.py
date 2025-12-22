@@ -11,11 +11,11 @@ from flask import Flask, request, make_response
 from google import genai
 
 # ===== Weaviate v4 (CORRECT IMPORTS) =====
-from weaviate import WeaviateClient
-from weaviate.connect import ConnectionParams, ProtocolParams
+from weaviate import Client
 from weaviate.auth import AuthApiKey
-import weaviate
-from weaviate.classes.init import Auth
+from dotenv import load_dotenv
+load_dotenv()
+
 
 # ---------------- CONFIG ----------------
 
@@ -39,17 +39,15 @@ genai_client = genai.Client(api_key=GEMINI_API_KEY)
 # ---------------- WEAVIATE CLIENT (REAL v4 SAFE WAY) ----------------
 # ---------------- WEAVIATE CLIENT ----------------
 
-weaviate_client = weaviate.connect_to_weaviate_cloud(
-    cluster_url=WEAVIATE_URL,
-    auth_credentials=Auth.api_key(WEAVIATE_API_KEY),
+weaviate_client = Client(
+    url="https://ffbja4rrkqk2g9hhwcmwq.c0.asia-southeast1.gcp.weaviate.cloud",
+    auth_client_secret=AuthApiKey(WEAVIATE_API_KEY)
 )
 
 if not weaviate_client.is_ready():
     raise RuntimeError("Weaviate client not ready")
 
 # 🔐 IMPORTANT: close client cleanly when app stops
-import atexit
-atexit.register(lambda: weaviate_client.close())
 
 
 # ---------------- GLOBAL STATE ----------------
@@ -63,14 +61,20 @@ RATE_LIMIT_SECONDS = 5
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
-        if not weaviate_client.collections.exists("PDFChunk"):
-            weaviate_client.collections.create(
-                name="PDFChunk",
-                vectorizer_config=None,
-                properties=[
-                    {"name": "text", "dataType": "text"}
+        # Check if class exists
+        existing_classes = [c["class"] for c in weaviate_client.schema.get()["classes"]]
+        if "PDFChunk" not in existing_classes:
+            weaviate_client.schema.create_class({
+                "class": "PDFChunk",
+                "vectorizer": "none",  # disables automatic vectorization
+                "properties": [
+                    {
+                        "name": "text",
+                        "dataType": ["text"]
+                    }
                 ]
-            )
+            })
+            print("PDFChunk class created successfully")
     except Exception as e:
         print("Schema init warning:", e)
 
@@ -109,21 +113,22 @@ def upload_file():
         pdf = fitz.open(path)
         collection = weaviate_client.collections.get("PDFChunk")
 
-        with collection.batch.dynamic() as batch:
+        with weaviate_client.batch as batch:
+            batch.batch_size = 100  # optional
             for page in pdf:
                 text = page.get_text().strip()
                 if not text:
                     continue
-
                 for chunk in chunk_text(text):
                     vec = embed(chunk)
                     if vec is None:
                         continue
-
-                    batch.add(
-                        properties={"text": chunk},
+                    batch.add_data_object(
+                        data_object={"text": chunk},
+                        class_name="PDFChunk",
                         vector=vec
                     )
+
 
         return {"message": "PDF indexed successfully"}
 
