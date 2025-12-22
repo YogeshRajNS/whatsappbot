@@ -12,10 +12,8 @@ from dotenv import load_dotenv
 from google import genai
 
 # ===== Weaviate v4 =====
-from weaviate import WeaviateClient
-from weaviate.auth import AuthApiKey
 import weaviate
-from weaviate.classes.init import Auth
+from weaviate.auth import AuthApiKey
 
 load_dotenv()
 
@@ -38,10 +36,9 @@ app = Flask(__name__)
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------- WEAVIATE CLIENT ----------------
-
 weaviate_client = weaviate.connect_to_weaviate_cloud(
     cluster_url=WEAVIATE_URL,
-    auth_credentials=Auth.api_key(WEAVIATE_API_KEY)
+    auth_credentials=AuthApiKey(WEAVIATE_API_KEY)
 )
 
 # Optionally check readiness
@@ -58,7 +55,8 @@ RATE_LIMIT_SECONDS = 5
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
-        existing_classes = [c["class"] for c in weaviate_client.schema.get()["classes"]]
+        schema = weaviate_client.schema.get()
+        existing_classes = [c["class"] for c in schema.get("classes", [])]
         if "PDFChunk" not in existing_classes:
             weaviate_client.schema.create_class({
                 "class": "PDFChunk",
@@ -140,7 +138,6 @@ def retrieve(query):
             .with_limit(1)
             .do()
         )
-
         objs = res.get("data", {}).get("Get", {}).get("PDFChunk", [])
         if not objs:
             return []
