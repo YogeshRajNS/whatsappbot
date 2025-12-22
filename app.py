@@ -126,33 +126,25 @@ def upload_file():
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
     try:
-        client = weaviate_client  # your existing client
+        collection = weaviate_client.collections.use("PDFChunk")
 
-        # Use .query.get(class_name, properties) with nearText
-        response = (
-            client.query
-            .get("PDFChunk", ["text"])  # explicitly request 'text'
-            .with_near_text({"concepts": [query]})
-            .with_limit(1)
-            .do()
+        response = collection.query.near_text(
+            query,        # your string query
+            limit=1,
+            include=["properties"]  # ✅ include actual properties
         )
 
-        # Navigate response
-        objs = response.get("data", {}).get("Get", {}).get("PDFChunk", [])
+        objs = response.objects
         if not objs:
             return []
-        return [objs[0]["text"]]
+
+        # Now access the 'text' property
+        text = objs[0].properties.get("text")
+        return [text] if text else []
 
     except Exception as e:
         print("Retrieve error:", e)
         return []
-
-
-
-
-
-
-
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
