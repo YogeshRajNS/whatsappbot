@@ -55,7 +55,7 @@ RATE_LIMIT_SECONDS = 5
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
-        schema = weaviate_client.schema.get()
+        schema = weaviate_client.schema.get()  # method, not attribute
         existing_classes = [c["class"] for c in schema.get("classes", [])]
         if "PDFChunk" not in existing_classes:
             weaviate_client.schema.create_class({
@@ -101,21 +101,22 @@ def upload_file():
 
     try:
         pdf = fitz.open(path)
-        with weaviate_client.batch as batch:
-            batch.batch_size = 100
-            for page in pdf:
-                text = page.get_text().strip()
-                if not text:
+        batch = weaviate_client.batch  # v4: no 'with' context
+        batch.batch_size = 100
+
+        for page in pdf:
+            text = page.get_text().strip()
+            if not text:
+                continue
+            for chunk in chunk_text(text):
+                vec = embed(chunk)
+                if vec is None:
                     continue
-                for chunk in chunk_text(text):
-                    vec = embed(chunk)
-                    if vec is None:
-                        continue
-                    batch.add_data_object(
-                        data_object={"text": chunk},
-                        class_name="PDFChunk",
-                        vector=vec
-                    )
+                batch.add_data_object(
+                    data_object={"text": chunk},
+                    class_name="PDFChunk",
+                    vector=vec
+                )
         return {"message": "PDF indexed successfully"}
     except Exception as e:
         print("Upload error:", e)
