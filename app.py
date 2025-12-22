@@ -11,7 +11,7 @@ from flask import Flask, request, make_response
 from google import genai
 
 # ===== Weaviate v4 (CORRECT IMPORTS) =====
-from weaviate import WeaviateClient
+from weaviate import Client
 from weaviate.auth import AuthApiKey
 from dotenv import load_dotenv
 load_dotenv()
@@ -39,8 +39,8 @@ genai_client = genai.Client(api_key=GEMINI_API_KEY)
 # ---------------- WEAVIATE CLIENT (REAL v4 SAFE WAY) ----------------
 # ---------------- WEAVIATE CLIENT ----------------
 
-weaviate_client = WeaviateClient(
-    url="https://ffbja4rrkqk2g9hhwcmwq.c0.asia-southeast1.gcp.weaviate.cloud",
+weaviate_client = Client(
+    url=WEAVIATE_URL,
     auth_client_secret=AuthApiKey(api_key=WEAVIATE_API_KEY)
 )
 
