@@ -126,26 +126,22 @@ def upload_file():
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
     try:
-        collection = weaviate_client.collections.use("PDFChunk")
-
-        # Perform a semantic search with property selection
-        response = collection.objects.query(
-            near_text={"concepts": [query]},
-            limit=1,
-            properties=["text"]
-        )
+        pdf_collection = weaviate_client.collections.use("PDFChunk")
+        response = pdf_collection.query.near_text(query, limit=1)
 
         objs = response.objects
         if not objs:
             return []
 
-        # Now 'text' will exist
-        text = objs[0].properties.get("text")
-        return [text] if text else []
+        # 🔍 DEBUG: print ALL properties
+        print("AVAILABLE PROPERTIES:", objs[0].properties)
+
+        return ["DEBUG CHECK CONSOLE"]
 
     except Exception as e:
         print("Retrieve error:", e)
         return []
+
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
