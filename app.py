@@ -140,14 +140,12 @@ def retrieve(query):
         if not objs:
             return []
 
-        # 🔍 DEBUG: print ALL properties
-        print("AVAILABLE PROPERTIES:", objs[0].properties)
-
-        return ["DEBUG CHECK CONSOLE"]
+        return [objs[0].properties["text"]]
 
     except Exception as e:
         print("Retrieve error:", e)
         return []
+
 
 
 # ---------------- GEMINI ANSWER ----------------
