@@ -122,16 +122,30 @@ def upload_file():
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
-    pdf_collection = weaviate_client.collections.use("PDFChunk")
     try:
-        response = pdf_collection.query.near_text(query=query, limit=1)
+        # Embed the query using Gemini
+        vec = embed(query)
+        if vec is None:
+            return []
+
+        pdf_collection = weaviate_client.collections.use("PDFChunk")
+
+        # Vector search (NOT near_text)
+        response = pdf_collection.query.near_vector(
+            vector=vec,
+            limit=1
+        )
+
         objs = response.objects
         if not objs:
             return []
+
         return [objs[0].properties["text"]]
+
     except Exception as e:
         print("Retrieve error:", e)
         return []
+
 
 # ---------------- GEMINI ANSWER ----------------
 def generate_answer(query, docs):
