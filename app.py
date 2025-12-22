@@ -128,18 +128,14 @@ def upload_file():
             os.remove(path)
 
 # ---------------- RETRIEVAL ----------------
+# ---------------- RETRIEVAL ----------------
 def retrieve(query):
     try:
-        # Embed query with Gemini
-        vec = embed(query)
-        if vec is None:
-            return []
-
         pdf_collection = weaviate_client.collections.use("PDFChunk")
 
-        # ✅ POSITONAL argument (v5 requirement)
-        response = pdf_collection.query.near_vector(
-            vec,
+        # Let Weaviate vectorizer handle the query
+        response = pdf_collection.query.near_text(
+            {"concepts": [query]},  # v5 syntax
             limit=1
         )
 
@@ -152,6 +148,7 @@ def retrieve(query):
     except Exception as e:
         print("Retrieve error:", e)
         return []
+
 
 
 # ---------------- GEMINI ANSWER ----------------
