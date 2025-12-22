@@ -128,17 +128,18 @@ def retrieve(query):
     try:
         collection = weaviate_client.collections.use("PDFChunk")
 
-        response = collection.query.near_text(
-            query,        # your string query
+        # Perform a semantic search with property selection
+        response = collection.objects.query(
+            near_text={"concepts": [query]},
             limit=1,
-            include=["properties"]  # ✅ include actual properties
+            properties=["text"]
         )
 
         objs = response.objects
         if not objs:
             return []
 
-        # Now access the 'text' property
+        # Now 'text' will exist
         text = objs[0].properties.get("text")
         return [text] if text else []
 
