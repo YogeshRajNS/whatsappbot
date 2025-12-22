@@ -58,10 +58,15 @@ def init_schema():
         pdf_collection = weaviate_client.collections.use("PDFChunk")
     except Exception:
         # Create collection if it doesn't exist with a vectorizer
+        # Delete old collection
+        weaviate_client.collections.delete("PDFChunk")
+        
+        # Recreate with vectorizer
         pdf_collection = weaviate_client.collections.create(
             name="PDFChunk",
             vector_config=Configure.Vectors.text2vec_weaviate()
         )
+
         print("PDFChunk collection created successfully")
 
 init_schema()
