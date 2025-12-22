@@ -1,23 +1,7 @@
-# Core packages
+PyMuPDF
 flask
-gunicorn
-dotenv
-waitress
-numpy
-requests
-pymupdf
 google-genai
+weaviate
 weaviate-client
-validators
-httpx
-authlib
-pillow
-cryptography
-sniffio
-
-# gRPC (only necessary packages for your setup)
-grpcio
-grpcio-status
-grpcio-health-checking
-protobuf
-
+dotenv
+gunicorn
