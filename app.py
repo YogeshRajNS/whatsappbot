@@ -123,16 +123,16 @@ def upload_file():
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
     try:
-        # Embed the query using Gemini
+        # Embed query with Gemini
         vec = embed(query)
         if vec is None:
             return []
 
         pdf_collection = weaviate_client.collections.use("PDFChunk")
 
-        # Vector search (NOT near_text)
+        # ✅ POSITONAL argument (v5 requirement)
         response = pdf_collection.query.near_vector(
-            vector=vec,
+            vec,
             limit=1
         )
 
