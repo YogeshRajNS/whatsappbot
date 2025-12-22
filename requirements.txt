@@ -1,6 +1,7 @@
 # Core packages
 flask
 gunicorn
+dotenv
 waitress
 numpy
 requests
@@ -19,3 +20,4 @@ grpcio
 grpcio-status
 grpcio-health-checking
 protobuf
+
