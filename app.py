@@ -1,5 +1,5 @@
 # ==========================================
-# WhatsApp PDF RAG Chatbot (Weaviate Cloud v4)
+# WhatsApp PDF RAG Chatbot (Weaviate Cloud v5+)
 # ==========================================
 
 import os, threading, time
@@ -11,9 +11,10 @@ from dotenv import load_dotenv
 # ===== Gemini NEW SDK =====
 from google import genai
 
-# ===== Weaviate v4 =====
+# ===== Weaviate v5+ =====
 import weaviate
 from weaviate.auth import AuthApiKey
+from weaviate.classes.config import Configure
 
 load_dotenv()
 
@@ -55,18 +56,14 @@ RATE_LIMIT_SECONDS = 5
 # ---------------- SCHEMA INIT ----------------
 def init_schema():
     try:
-        schema = weaviate_client.schema_api.get()
-        existing_classes = [c["class"] for c in schema.get("classes", [])]
-
-        if "PDFChunk" not in existing_classes:
-            weaviate_client.schema_api.create_class({
-                "class": "PDFChunk",
-                "vectorizer": "none",
-                "properties": [{"name": "text", "dataType": ["text"]}]
-            })
-            print("PDFChunk class created successfully")  # ✅ Fixed indentation
-    except Exception as e:
-        print("Schema init warning:", e)
+        pdf_collection = weaviate_client.collections.use("PDFChunk")
+    except Exception:
+        # Create collection if it doesn't exist
+        pdf_collection = weaviate_client.collections.create(
+            name="PDFChunk",
+            vector_config=Configure.Vectors.text2vec_weaviate()
+        )
+        print("PDFChunk collection created successfully")
 
 init_schema()
 
@@ -98,50 +95,41 @@ def upload_file():
     path = os.path.join(UPLOAD_DIR, file.filename)
     file.save(path)
 
+    pdf = None
     try:
         pdf = fitz.open(path)
-        batch = weaviate_client.batch  # v4: no 'with' context
-        batch.batch_size = 100
+        pdf_collection = weaviate_client.collections.use("PDFChunk")
 
-        for page in pdf:
-            text = page.get_text().strip()
-            if not text:
-                continue
-            for chunk in chunk_text(text):
-                vec = embed(chunk)
-                if vec is None:
+        with pdf_collection.batch.fixed_size(batch_size=200) as batch:
+            for page in pdf:
+                text = page.get_text().strip()
+                if not text:
                     continue
-                batch.add_data_object(
-                    data_object={"text": chunk},
-                    class_name="PDFChunk",
-                    vector=vec
-                )
+                for chunk in chunk_text(text):
+                    # No need to manually pass vector if collection vectorizer is enabled
+                    batch.add_object(properties={"text": chunk})
+
         return {"message": "PDF indexed successfully"}
+
     except Exception as e:
         print("Upload error:", e)
         return {"error": str(e)}, 500
+
     finally:
+        if pdf:
+            pdf.close()
         if os.path.exists(path):
             os.remove(path)
 
 # ---------------- RETRIEVAL ----------------
 def retrieve(query):
-    vec = embed(query)
-    if vec is None:
-        return []
-
+    pdf_collection = weaviate_client.collections.use("PDFChunk")
     try:
-        res = (
-            weaviate_client.query
-            .get("PDFChunk", ["text"])
-            .with_near_vector({"vector": vec})
-            .with_limit(1)
-            .do()
-        )
-        objs = res.get("data", {}).get("Get", {}).get("PDFChunk", [])
+        response = pdf_collection.query.near_text(query=query, limit=1)
+        objs = response.objects
         if not objs:
             return []
-        return [objs[0]["text"]]
+        return [objs[0].properties["text"]]
     except Exception as e:
         print("Retrieve error:", e)
         return []
@@ -240,7 +228,7 @@ def webhook():
 # ---------------- HEALTH ----------------
 @app.route("/")
 def health():
-    return "WhatsApp RAG Bot Running (Weaviate v4)", 200
+    return "WhatsApp RAG Bot Running (Weaviate v5+)", 200
 
 # ---------------- RUN APP ----------------
 if __name__ == "__main__":
