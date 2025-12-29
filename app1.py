@@ -134,22 +134,20 @@ def upload_file():
     pdf = None
     try:
         with pdfplumber.open(path) as pdf:
-          for page in pdf.pages:
-              text = page.extract_text()
-              if not text:
-                  continue
-
-        
+            for page in pdf.pages:
+                text = page.extract_text()
+                if not text:
+                    continue
+    
                 for chunk in chunk_text(text):
                     vec = embed(chunk)
                     if vec is None:
                         continue
-        
+    
                     index.add(np.array([vec], dtype="float32"))
                     metadata.append(chunk)
-        
+    
         save_faiss()
-
         return {"message": "PDF indexed successfully"}
 
     except Exception as e:
