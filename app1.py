@@ -140,13 +140,13 @@ def upload_file():
                   continue
 
         
-            for chunk in chunk_text(text):
-                vec = embed(chunk)
-                if vec is None:
-                    continue
+                for chunk in chunk_text(text):
+                    vec = embed(chunk)
+                    if vec is None:
+                        continue
         
-                index.add(np.array([vec], dtype="float32"))
-                metadata.append(chunk)
+                    index.add(np.array([vec], dtype="float32"))
+                    metadata.append(chunk)
         
         save_faiss()
 
