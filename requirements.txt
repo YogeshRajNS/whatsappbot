@@ -3,16 +3,12 @@ flask==3.0.2
 gunicorn==21.2.0
 python-dotenv==1.0.1
 
-# ---- PDF ----
-PyMuPDF==1.23.8
+# ---- PDF (Railway safe) ----
+pdfplumber==0.11.4
 
-# ---- Gemini (NEW SDK) ----
+# ---- Gemini ----
 google-genai==0.3.0
 
-# ---- Weaviate v5+ ----
-# weaviate-client==4.6.1
-# weaviate==0.1.0
+# ---- Vector DB ----
 faiss-cpu==1.8.0
 numpy==1.26.4
-
-
