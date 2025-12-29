@@ -7,14 +7,18 @@ import fitz
 import requests
 from flask import Flask, request, make_response
 from dotenv import load_dotenv
+import faiss
+import numpy as np
+import pickle
+
 
 # ===== Gemini NEW SDK =====
 from google import genai
 
 # ===== Weaviate v5+ =====
-import weaviate
-from weaviate.auth import AuthApiKey
-from weaviate.classes.config import Configure
+# import weaviate
+# from weaviate.auth import AuthApiKey
+# from weaviate.classes.config import Configure
 
 load_dotenv()
 
@@ -24,8 +28,8 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_123")
 
-WEAVIATE_URL = os.getenv("WEAVIATE_URL")  # Full URL with https://
-WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
+# WEAVIATE_URL = os.getenv("WEAVIATE_URL")  # Full URL with https://
+# WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -37,13 +41,13 @@ app = Flask(__name__)
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # ---------------- WEAVIATE CLIENT ----------------
-weaviate_client = weaviate.connect_to_weaviate_cloud(
-    cluster_url=WEAVIATE_URL,
-    auth_credentials=AuthApiKey(WEAVIATE_API_KEY)
-)
+# weaviate_client = weaviate.connect_to_weaviate_cloud(
+#     cluster_url=WEAVIATE_URL,
+#     auth_credentials=AuthApiKey(WEAVIATE_API_KEY)
+# )
 
-if not weaviate_client.is_ready():
-    raise RuntimeError("Weaviate client not ready")
+# if not weaviate_client.is_ready():
+#     raise RuntimeError("Weaviate client not ready")
 
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
@@ -51,15 +55,22 @@ LAST_MESSAGE = {}
 SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
 MAX_DOC_CHARS = 1500
 RATE_LIMIT_SECONDS = 5
+EMBED_DIM = 768  # Gemini text-embedding-004
+INDEX_FILE = "faiss.index"
+META_FILE = "meta.pkl"
+
+index = faiss.IndexFlatL2(EMBED_DIM)
+metadata = []
+
 
 # ---------------- SCHEMA INIT ----------------
-def init_schema():
-    try:
-        pdf_collection = weaviate_client.collections.use("PDFChunk")
-        print("Using existing PDFChunk collection")
-    except Exception as e:
-        print("Collection not found:", e)
-init_schema()
+# def init_schema():
+#     try:
+#         pdf_collection = weaviate_client.collections.use("PDFChunk")
+#         print("Using existing PDFChunk collection")
+#     except Exception as e:
+#         print("Collection not found:", e)
+# init_schema()
 
 # ---------------- UTILS ----------------
 def embed(text):
@@ -93,6 +104,22 @@ def extract_text(page):
         text = " ".join(b[4] for b in blocks if b[4].strip())
     return text
 
+def save_faiss():
+    faiss.write_index(index, INDEX_FILE)
+    with open(META_FILE, "wb") as f:
+        pickle.dump(metadata, f)
+
+def load_faiss():
+    global index, metadata
+    if os.path.exists(INDEX_FILE):
+        index = faiss.read_index(INDEX_FILE)
+    if os.path.exists(META_FILE):
+        with open(META_FILE, "rb") as f:
+            metadata = pickle.load(f)
+
+load_faiss()
+
+
 # ---------------- PDF INGEST ----------------
 @app.route("/upload_file", methods=["POST"])
 def upload_file():
@@ -106,16 +133,20 @@ def upload_file():
     pdf = None
     try:
         pdf = fitz.open(path)
-        pdf_collection = weaviate_client.collections.use("PDFChunk")
-
-        with pdf_collection.batch.fixed_size(batch_size=200) as batch:
-            for page in pdf:
-                text = extract_text(page).strip()
-                if not text:
+        for page in pdf:
+            text = extract_text(page).strip()
+            if not text:
+                continue
+        
+            for chunk in chunk_text(text):
+                vec = embed(chunk)
+                if vec is None:
                     continue
-                for chunk in chunk_text(text):
-                    # Let the collection vectorizer handle vectorization
-                    batch.add_object(properties={"text": chunk})
+        
+                index.add(np.array([vec], dtype="float32"))
+                metadata.append(chunk)
+        
+        save_faiss()
 
         return {"message": "PDF indexed successfully"}
 
@@ -131,20 +162,20 @@ def upload_file():
 
 # ---------------- RETRIEVAL ----------------
 # ---------------- RETRIEVAL ----------------
-def retrieve(query):
-    try:
-        pdf_collection = weaviate_client.collections.use("PDFChunk")
-        response = pdf_collection.query.near_text(query, limit=1)
-
-        objs = response.objects
-        if not objs:
-            return []
-
-        return [objs[0].properties["text"]]
-
-    except Exception as e:
-        print("Retrieve error:", e)
+def retrieve(query, k=3):
+    vec = embed(query)
+    if vec is None or index.ntotal == 0:
         return []
+
+    D, I = index.search(np.array([vec], dtype="float32"), k)
+
+    results = []
+    for idx in I[0]:
+        if idx < len(metadata):
+            results.append(metadata[idx])
+
+    return results
+
 
 
 
