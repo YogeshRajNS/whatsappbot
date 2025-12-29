@@ -231,7 +231,7 @@ def process_message(phone, text):
     LAST_MESSAGE[phone] = now
 
     if text.lower().strip() in SMALL_TALK:
-        send_whatsapp(phone, "Hi 👋 Ask a question about the PDF.")
+        send_whatsapp(phone, "Hi 👋 How can i help you?.")
         return
 
     docs = retrieve(text)
