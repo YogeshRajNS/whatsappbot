@@ -1,7 +1,14 @@
-PyMuPDF
-flask
-google-genai
-weaviate
-weaviate-client
-dotenv
-gunicorn
+# ---- Core ----
+flask==3.0.2
+gunicorn==21.2.0
+python-dotenv==1.0.1
+
+# ---- PDF ----
+PyMuPDF==1.23.8
+
+# ---- Gemini (NEW SDK) ----
+google-genai==0.3.0
+
+# ---- Weaviate v5+ ----
+weaviate-client==4.6.1
+weaviate==0.1.0
