@@ -1,25 +1,17 @@
 # ==========================================
-# WhatsApp PDF RAG Chatbot (Weaviate Cloud v5+)
+# WhatsApp PDF RAG Chatbot (ChromaDB via API)
 # ==========================================
 
-import os, threading, time
-# import fitz
-import pdfplumber
+import os
+import threading
+import time
 import requests
+import pdfplumber
 from flask import Flask, request, make_response
 from dotenv import load_dotenv
-import faiss
-import numpy as np
-import pickle
 
-
-# ===== Gemini NEW SDK =====
+# ===== Gemini SDK =====
 from google import genai
-
-# ===== Weaviate v5+ =====
-# import weaviate
-# from weaviate.auth import AuthApiKey
-# from weaviate.classes.config import Configure
 
 load_dotenv()
 
@@ -29,11 +21,15 @@ WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "verify_123")
 
-# WEAVIATE_URL = os.getenv("WEAVIATE_URL")  # Full URL with https://
-# WEAVIATE_API_KEY = os.getenv("WEAVIATE_API_KEY")
+# 🔥 Chroma API (hosted separately)
+CHROMA_API_URL = os.getenv("CHROMA_API_URL", "http://localhost:5001")
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+MAX_DOC_CHARS = 1500
+RATE_LIMIT_SECONDS = 5
+SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
 
 # ---------------- APP ----------------
 app = Flask(__name__)
@@ -41,37 +37,9 @@ app = Flask(__name__)
 # ---------------- GEMINI CLIENT ----------------
 genai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# ---------------- WEAVIATE CLIENT ----------------
-# weaviate_client = weaviate.connect_to_weaviate_cloud(
-#     cluster_url=WEAVIATE_URL,
-#     auth_credentials=AuthApiKey(WEAVIATE_API_KEY)
-# )
-
-# if not weaviate_client.is_ready():
-#     raise RuntimeError("Weaviate client not ready")
-
 # ---------------- GLOBAL STATE ----------------
 EMBED_CACHE = {}
 LAST_MESSAGE = {}
-SMALL_TALK = {"hi", "hello", "hey", "thanks", "thank you", "ok"}
-MAX_DOC_CHARS = 1500
-RATE_LIMIT_SECONDS = 5
-EMBED_DIM = 768  # Gemini text-embedding-004
-INDEX_FILE = "faiss.index"
-META_FILE = "meta.pkl"
-
-index = faiss.IndexFlatL2(EMBED_DIM)
-metadata = []
-
-
-# ---------------- SCHEMA INIT ----------------
-# def init_schema():
-#     try:
-#         pdf_collection = weaviate_client.collections.use("PDFChunk")
-#         print("Using existing PDFChunk collection")
-#     except Exception as e:
-#         print("Collection not found:", e)
-# init_schema()
 
 # ---------------- UTILS ----------------
 def embed(text):
@@ -83,13 +51,9 @@ def embed(text):
             model="models/text-embedding-004",
             contents=[text]
         )
-
-        # ✅ IMPORTANT: extract vector values
         vector = res.embeddings[0].values
-
         EMBED_CACHE[text] = vector
         return vector
-
     except Exception as e:
         print("Embedding error:", e)
         return None
@@ -97,28 +61,6 @@ def embed(text):
 
 def chunk_text(text, size=400):
     return [text[i:i + size] for i in range(0, len(text), size)]
-
-def extract_text(page):
-    text = page.get_text("text").strip()
-    if len(text) < 50:  # garbage protection (ID, page no, etc.)
-        blocks = page.get_text("blocks")
-        text = " ".join(b[4] for b in blocks if b[4].strip())
-    return text
-
-def save_faiss():
-    faiss.write_index(index, INDEX_FILE)
-    with open(META_FILE, "wb") as f:
-        pickle.dump(metadata, f)
-
-def load_faiss():
-    global index, metadata
-    if os.path.exists(INDEX_FILE):
-        index = faiss.read_index(INDEX_FILE)
-    if os.path.exists(META_FILE):
-        with open(META_FILE, "rb") as f:
-            metadata = pickle.load(f)
-
-load_faiss()
 
 
 # ---------------- PDF INGEST ----------------
@@ -131,52 +73,63 @@ def upload_file():
     path = os.path.join(UPLOAD_DIR, file.filename)
     file.save(path)
 
-    pdf = None
     try:
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
                 text = page.extract_text()
                 if not text:
                     continue
-    
+
                 for chunk in chunk_text(text):
-                    vec = embed(chunk)
-                    if vec is None:
+                    vector = embed(chunk)
+                    if not vector:
                         continue
-    
-                    index.add(np.array([vec], dtype="float32"))
-                    metadata.append(chunk)
-    
-        save_faiss()
-        return {"message": "PDF indexed successfully"}
+
+                    payload = {
+                        "text": chunk,
+                        "embedding": vector
+                    }
+
+                    # 🔥 Send to ChromaDB API
+                    requests.post(
+                        f"{CHROMA_API_URL}/add_doc",
+                        json=payload,
+                        timeout=10
+                    )
+
+        return {"message": "PDF indexed successfully using ChromaDB"}
 
     except Exception as e:
         print("Upload error:", e)
         return {"error": str(e)}, 500
 
     finally:
-        if pdf:
-            pdf.close()
         if os.path.exists(path):
             os.remove(path)
 
-# ---------------- RETRIEVAL ----------------
+
 # ---------------- RETRIEVAL ----------------
 def retrieve(query, k=3):
-    vec = embed(query)
-    if vec is None or index.ntotal == 0:
+    vector = embed(query)
+    if not vector:
         return []
 
-    D, I = index.search(np.array([vec], dtype="float32"), k)
+    payload = {
+        "vector": vector,
+        "top_k": k
+    }
 
-    results = []
-    for idx in I[0]:
-        if idx < len(metadata):
-            results.append(metadata[idx])
-
-    return results
-
-
+    try:
+        res = requests.post(
+            f"{CHROMA_API_URL}/query_docs",
+            json=payload,
+            timeout=10
+        )
+        data = res.json()
+        return data.get("results", [])
+    except Exception as e:
+        print("Chroma retrieval error:", e)
+        return []
 
 
 # ---------------- GEMINI ANSWER ----------------
@@ -202,6 +155,7 @@ Question:
         print("Gemini error:", e)
         return None
 
+
 # ---------------- WHATSAPP SEND ----------------
 def send_whatsapp(to, text):
     try:
@@ -220,6 +174,7 @@ def send_whatsapp(to, text):
     except Exception as e:
         print("WhatsApp send error:", e)
 
+
 # ---------------- MESSAGE WORKER ----------------
 def process_message(phone, text):
     now = time.time()
@@ -229,7 +184,7 @@ def process_message(phone, text):
     LAST_MESSAGE[phone] = now
 
     if text.lower().strip() in SMALL_TALK:
-        send_whatsapp(phone, "Hi 👋 How can i help you?.")
+        send_whatsapp(phone, "Hi 👋 How can I help you?")
         return
 
     docs = retrieve(text)
@@ -240,13 +195,16 @@ def process_message(phone, text):
     answer = generate_answer(text, docs)
     send_whatsapp(phone, answer or "⚠️ Unable to generate answer.")
 
-# ---------------- WEBHOOK ----------------
+
+# ---------------- WEBHOOK VERIFY ----------------
 @app.route("/webhook", methods=["GET"])
 def verify():
     if request.args.get("hub.verify_token") == VERIFY_TOKEN:
         return make_response(request.args.get("hub.challenge"), 200)
     return "Forbidden", 403
 
+
+# ---------------- WEBHOOK RECEIVE ----------------
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -268,18 +226,17 @@ def webhook():
                 ).start()
     except Exception as e:
         print("Webhook parse error:", e)
+
     return "ok", 200
+
 
 # ---------------- HEALTH ----------------
 @app.route("/")
 def health():
-    return "WhatsApp RAG Bot Running (Weaviate v5+)", 200
+    return "WhatsApp RAG Bot Running (ChromaDB API)", 200
 
-# ---------------- RUN APP ----------------
-# if __name__ == "__main__":
-#     app.run(host="0.0.0.0", port=5000)
-#--------------To deploy in railway-----------------
+
+# ---------------- RUN (Railway) ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
